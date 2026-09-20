@@ -15,7 +15,7 @@ import {
 } from './report.ts';
 import type { ReportFileWriter, SetOutputFn, SummaryWriter } from './report.ts';
 
-// Writes the SARIF report to the given path, creating parent directories.
+// Writes the SARIF report, creating parent directories as needed.
 export type SarifFileWriter = (path: string, contents: string) => void;
 
 export interface OrchestrateDeps {
@@ -33,7 +33,7 @@ export interface OrchestrateDeps {
 export async function orchestrate(deps: OrchestrateDeps): Promise<void> {
   const config = deps.readInputs();
 
-  // First pass: always JSON, so we can parse, set outputs, and classify the exit code.
+  // First pass: silent JSON, for outputs and exit classification.
   const jsonRun = await runCli(
     {
       version: config.version,
@@ -60,8 +60,7 @@ export async function orchestrate(deps: OrchestrateDeps): Promise<void> {
   const warningTripped = config.failOnWarning && agg.warningCount > 0;
   const policyPassed = classification === 'success' && !warningTripped;
 
-  // Publish outputs before any setFailed, so downstream steps can read them
-  // even when the job is marked failed.
+  // Publish outputs before any setFailed so downstream steps can read them.
   setOutputs(
     { reports: parsed.reports, agg, policyPassed },
     {
@@ -71,9 +70,8 @@ export async function orchestrate(deps: OrchestrateDeps): Promise<void> {
     },
   );
 
-  // Second pass: render the user's preferred format to the action log.
-  // We deliberately call the CLI again rather than re-render JSON ourselves,
-  // so the action stays consistent with the CLI's renderer.
+  // Second pass: the user's format, echoed to the log. Re-running the CLI keeps
+  // the output consistent with its own renderer instead of re-rendering JSON here.
   await runCli(
     {
       version: config.version,

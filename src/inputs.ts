@@ -4,7 +4,6 @@ export type Format = 'human' | 'json' | 'sarif';
 
 export type TargetKind = 'message' | 'file' | 'commit' | 'range' | 'base';
 
-/** The single validation target the CLI will run against. */
 export interface Target {
   kind: TargetKind;
   value: string;
@@ -23,7 +22,6 @@ export interface Config {
 
 const FORMATS: readonly Format[] = ['human', 'json', 'sarif'];
 
-// The mutually exclusive source inputs, in the order they are documented.
 const TARGET_KINDS: readonly TargetKind[] = ['message', 'file', 'commit', 'range', 'base'];
 
 function readEnum<T extends string>(name: string, allowed: readonly T[]): T | null {
@@ -48,9 +46,8 @@ function readString(name: string): string | null {
   return raw === '' ? null : raw;
 }
 
-// Resolves the five mutually exclusive source inputs into a single target.
-// The `commit` input deliberately has no default in action.yml, so an unset
-// input reads as empty here and the CLI's own default (HEAD) applies.
+// `commit` deliberately has no action.yml default: a YAML default would make it
+// always look user-set and break the mutual-exclusion check.
 function resolveTarget(): Target {
   const set: Target[] = [];
   for (const kind of TARGET_KINDS) {

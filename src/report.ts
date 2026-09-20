@@ -9,8 +9,8 @@ export function classifyExit(exitCode: number): ExitClassification {
   return 'error';
 }
 
-// commit-sentinel writes the report to stdout on success (exit 0) and to
-// stderr on validation failure (exit 2) — regardless of --json/--sarif.
+// The CLI writes the report to stdout on exit 0 but to stderr on exit 2,
+// regardless of --json/--sarif.
 export function selectReportText(result: RunResult): string {
   return result.exitCode === 0 ? result.stdout : result.stderr;
 }
@@ -23,14 +23,12 @@ export interface ParsedReports {
 export function parseReport(text: string): ParsedReports {
   const trimmed = text.trim();
 
-  // A healthy CLI always prints a report; silence means something went wrong
-  // (e.g. a broken install), so fail loudly rather than report a green run.
+  // A healthy CLI always prints a report; fail loudly rather than report a silent green.
   if (trimmed === '') {
     throw new Error('commit-sentinel produced no output');
   }
 
-  // An empty range short-circuits with exit 0 and plain text on stdout,
-  // even when --json was requested. Treat it as zero commits validated.
+  // An empty range short-circuits with exit 0 and plain text, even under --json.
   if (trimmed.startsWith('No commits found in range')) {
     return { reports: [], emptyRange: true };
   }
@@ -45,8 +43,8 @@ export function parseReport(text: string): ParsedReports {
     );
   }
 
-  // Single-target modes emit one ValidationReport object; --range/--base emit
-  // an array (one report per commit, oldest first). Normalize to an array.
+  // Single-target modes emit one report object; --range/--base emit an array
+  // (one report per commit, oldest first).
   const reports = Array.isArray(parsed)
     ? (parsed as ValidationReport[])
     : [parsed as ValidationReport];
@@ -79,7 +77,7 @@ export type SetOutputFn = (name: string, value: string) => void;
 
 export type SummaryWriter = (markdown: string) => Promise<void>;
 
-// Writes the full JSON report somewhere durable and returns the path to it.
+// Persists the full JSON report and returns its path.
 export type ReportFileWriter = (json: string) => string;
 
 export interface OutputDeps {
@@ -88,9 +86,8 @@ export interface OutputDeps {
   warning: (msg: string) => void;
 }
 
-// GitHub caps a single output value at ~1 MB (and job-level outputs enforce it
-// strictly). Above this we skip the inline `report-json` and point users at the
-// `report-path` file instead, rather than emit a silently truncated value.
+// GitHub caps a single output value at ~1 MB; above it, `report-json` is
+// skipped in favor of `report-path` rather than emitting a truncated value.
 export const MAX_INLINE_REPORT_BYTES = 1_000_000;
 
 export function setOutputs(opts: PublishOptions, deps: OutputDeps): void {
@@ -106,13 +103,10 @@ export function setOutputs(opts: PublishOptions, deps: OutputDeps): void {
   // Always the normalized array, even for single-target runs.
   const json = JSON.stringify(reports);
 
-  // Always persist the full report to a file so large reports remain available
-  // regardless of the inline-output size cap.
   const reportPath = writeReportFile(json);
   setOutput('report-path', reportPath);
 
-  // Only expose the inline JSON when it comfortably fits GitHub's output limit.
-  // Byte length (not string length) is what counts against the cap.
+  // Byte length (not string length) is what counts against GitHub's cap.
   const byteLength = Buffer.byteLength(json, 'utf8');
   if (byteLength <= MAX_INLINE_REPORT_BYTES) {
     setOutput('report-json', json);
@@ -129,8 +123,7 @@ function escapeCell(text: string): string {
   return text.replaceAll('|', '\\|').replaceAll('\n', '<br>');
 }
 
-// The CLI has no markdown formatter, so unlike the dependency-guard-action
-// template we render the step summary ourselves from the parsed JSON report.
+// The CLI has no markdown formatter, so the summary is rendered here from the parsed report.
 export function renderSummary(parsed: ParsedReports, agg: Aggregate): string {
   const lines: string[] = ['## Commit Sentinel', ''];
 
@@ -148,8 +141,7 @@ export function renderSummary(parsed: ParsedReports, agg: Aggregate): string {
     `**Commits:** ${agg.commitsCount} · **Errors:** ${agg.errorCount} · **Warnings:** ${agg.warningCount}`,
   );
 
-  // One section per commit that has problems, in CLI order (oldest first).
-  // The JSON report carries no SHA, so the commit header is the identifier.
+  // The JSON report carries no SHA, so the commit header identifies each commit.
   for (const report of parsed.reports) {
     if (report.results.length === 0) continue;
     lines.push('', `### \`${escapeCell(report.commit.header)}\``, '');
