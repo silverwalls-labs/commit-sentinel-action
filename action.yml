@@ -1,0 +1,84 @@
+name: 'Commit Sentinel'
+description: 'Validate git commit messages against Conventional Commits and custom rules, with policy enforcement.'
+author: 'silverwalls-labs'
+branding:
+  icon: 'git-commit'
+  color: 'purple'
+
+inputs:
+  version:
+    description: |
+      Version spec of @silverwalls-labs/commit-sentinel to run via npx. Accepts
+      any spec npm understands: an exact version ("0.2.0"), a semver range
+      ("^0.2.0"), a dist-tag ("latest", "next"), or a git/file URL. Defaults to
+      "latest" for getting-started ergonomics; pin for reproducible builds.
+    required: false
+    default: 'latest'
+  working-directory:
+    description: 'Directory to run the CLI in (passed as cwd).'
+    required: false
+    default: '.'
+  message:
+    description: 'Validate a literal commit message string. Mutually exclusive with file, commit, range, base.'
+    required: false
+  file:
+    description: 'Validate the first line of a commit message file, e.g. .git/COMMIT_EDITMSG. Mutually exclusive with message, commit, range, base.'
+    required: false
+  commit:
+    description: |
+      Git ref whose commit message to validate. Defaults to HEAD when no source
+      input (message, file, commit, range, base) is set. Mutually exclusive
+      with message, file, range, base.
+    required: false
+  range:
+    description: 'Git range to validate, e.g. main..HEAD. Mutually exclusive with message, file, commit, base.'
+    required: false
+  base:
+    description: 'PR shorthand: validate all commits from <ref>..HEAD. Mutually exclusive with message, file, commit, range.'
+    required: false
+  config:
+    description: 'Explicit path to a config file; otherwise the CLI resolves its own config.'
+    required: false
+  format:
+    description: 'Format printed to the action log: human | json | sarif.'
+    required: false
+    default: 'human'
+  fail-on-warning:
+    description: 'Fail the job when warning-count > 0, even though the CLI exits 0.'
+    required: false
+    default: 'false'
+  summary:
+    description: 'Write a Markdown report to $GITHUB_STEP_SUMMARY.'
+    required: false
+    default: 'true'
+  sarif-file:
+    description: |
+      When set, also write SARIF 2.1.0 to this path (extra CLI pass with
+      --sarif) for GitHub Code Scanning upload. Relative paths resolve against
+      working-directory.
+    required: false
+
+outputs:
+  valid:
+    description: '"true" / "false" — overall validation result across all validated commits.'
+  commits-count:
+    description: 'Number of commits validated.'
+  error-count:
+    description: 'Total rule violations at error level.'
+  warning-count:
+    description: 'Total rule violations at warning level.'
+  policy-passed:
+    description: '"true" if the CLI exited 0 and fail-on-warning did not trip; "false" on a policy violation or a tripped fail-on-warning. Unset when the CLI errors before producing a report.'
+  report-json:
+    description: |
+      Full JSON report, inline, always a JSON array of ValidationReport (one
+      entry per commit). Omitted (empty string) when the report exceeds
+      GitHub's ~1 MB output limit; read "report-path" instead.
+  report-path:
+    description: 'Filesystem path to the full JSON report. Always set; use for large reports.'
+  sarif-path:
+    description: 'Path to the SARIF report. Only set when the sarif-file input is provided.'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'

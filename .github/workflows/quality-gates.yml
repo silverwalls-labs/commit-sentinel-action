@@ -1,0 +1,71 @@
+name: Quality gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Build bundle
+        run: npm run build
+
+      - name: Verify dist/ is up to date
+        run: |
+          if ! git diff --exit-code -- dist/; then
+            echo "::error::dist/index.js is out of date. Run 'npm run build' and commit the result."
+            exit 1
+          fi
+
+  dogfood:
+    runs-on: ubuntu-24.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The CLI runs via npx on the PATH node, so it needs Node 24 there too.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      # Range mode excludes merge commits (git rev-list --no-merges), so the
+      # synthetic pull_request merge commit never trips the format rule.
+      - name: Validate PR commits with this action
+        if: github.event_name == 'pull_request'
+        uses: ./
+        with:
+          version: '0.3.0'
+          base: origin/${{ github.event.pull_request.base.ref }}
+
+      # base: HEAD~1 validates the pushed tip; when the tip is a merge commit
+      # it is skipped by --no-merges instead of failing the format rule.
+      - name: Validate the pushed commit with this action
+        if: github.event_name == 'push'
+        uses: ./
+        with:
+          version: '0.3.0'
+          base: HEAD~1

@@ -1,0 +1,313 @@
+name: Test action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  valid-message:
+    name: Valid message passes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: run
+        uses: ./
+        with:
+          version: '0.3.0'
+          message: 'feat: add login'
+
+      - name: Assert outputs
+        env:
+          VALID: ${{ steps.run.outputs.valid }}
+          POLICY_PASSED: ${{ steps.run.outputs.policy-passed }}
+          ERROR_COUNT: ${{ steps.run.outputs.error-count }}
+          COMMITS_COUNT: ${{ steps.run.outputs.commits-count }}
+          REPORT_PATH: ${{ steps.run.outputs.report-path }}
+        run: |
+          set -euo pipefail
+          if [[ "$VALID" != "true" ]]; then
+            echo "::error::Expected valid=true, got '$VALID'"
+            exit 1
+          fi
+          if [[ "$POLICY_PASSED" != "true" ]]; then
+            echo "::error::Expected policy-passed=true, got '$POLICY_PASSED'"
+            exit 1
+          fi
+          if [[ "$ERROR_COUNT" != "0" ]]; then
+            echo "::error::Expected error-count=0, got '$ERROR_COUNT'"
+            exit 1
+          fi
+          if [[ "$COMMITS_COUNT" != "1" ]]; then
+            echo "::error::Expected commits-count=1, got '$COMMITS_COUNT'"
+            exit 1
+          fi
+          jq -e '.[0].valid == true' "$REPORT_PATH" > /dev/null
+
+  invalid-message:
+    name: Invalid message trips the policy (expected to fail)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: run
+        uses: ./
+        continue-on-error: true
+        with:
+          version: '0.3.0'
+          message: 'bad message'
+
+      - name: Assert step failed with policy violation
+        env:
+          STEP_OUTCOME: ${{ steps.run.outcome }}
+          VALID: ${{ steps.run.outputs.valid }}
+          POLICY_PASSED: ${{ steps.run.outputs.policy-passed }}
+          ERROR_COUNT: ${{ steps.run.outputs.error-count }}
+        run: |
+          set -euo pipefail
+          if [[ "$STEP_OUTCOME" != "failure" ]]; then
+            echo "::error::Expected the action step to fail on an invalid message, got outcome='$STEP_OUTCOME'"
+            exit 1
+          fi
+          if [[ "$VALID" != "false" ]]; then
+            echo "::error::Expected valid=false, got '$VALID'"
+            exit 1
+          fi
+          if [[ "$POLICY_PASSED" != "false" ]]; then
+            echo "::error::Expected policy-passed=false, got '$POLICY_PASSED'"
+            exit 1
+          fi
+          if [[ ! "$ERROR_COUNT" =~ ^[0-9]+$ || "$ERROR_COUNT" -lt 1 ]]; then
+            echo "::error::Expected error-count >= 1, got '$ERROR_COUNT'"
+            exit 1
+          fi
+
+  warning-fail:
+    name: fail-on-warning trips on warnings (expected to fail)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      # A >100-char header trips header-max-length at warn severity in the
+      # default strict preset, while staying a valid commit (exit 0).
+      - id: run
+        uses: ./
+        continue-on-error: true
+        with:
+          version: '0.3.0'
+          message: 'feat: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+          fail-on-warning: 'true'
+
+      - name: Assert step failed on warnings only
+        env:
+          STEP_OUTCOME: ${{ steps.run.outcome }}
+          POLICY_PASSED: ${{ steps.run.outputs.policy-passed }}
+          ERROR_COUNT: ${{ steps.run.outputs.error-count }}
+          WARNING_COUNT: ${{ steps.run.outputs.warning-count }}
+        run: |
+          set -euo pipefail
+          if [[ "$STEP_OUTCOME" != "failure" ]]; then
+            echo "::error::Expected the action step to fail with fail-on-warning, got outcome='$STEP_OUTCOME'"
+            exit 1
+          fi
+          if [[ "$POLICY_PASSED" != "false" ]]; then
+            echo "::error::Expected policy-passed=false, got '$POLICY_PASSED'"
+            exit 1
+          fi
+          if [[ "$ERROR_COUNT" != "0" ]]; then
+            echo "::error::Expected error-count=0, got '$ERROR_COUNT'"
+            exit 1
+          fi
+          if [[ "$WARNING_COUNT" != "1" ]]; then
+            echo "::error::Expected warning-count=1, got '$WARNING_COUNT'"
+            exit 1
+          fi
+
+  warning-pass:
+    name: Warnings pass without fail-on-warning
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: run
+        uses: ./
+        with:
+          version: '0.3.0'
+          message: 'feat: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+
+      - name: Assert warnings were reported but the policy passed
+        env:
+          POLICY_PASSED: ${{ steps.run.outputs.policy-passed }}
+          WARNING_COUNT: ${{ steps.run.outputs.warning-count }}
+        run: |
+          set -euo pipefail
+          if [[ "$POLICY_PASSED" != "true" ]]; then
+            echo "::error::Expected policy-passed=true, got '$POLICY_PASSED'"
+            exit 1
+          fi
+          if [[ "$WARNING_COUNT" != "1" ]]; then
+            echo "::error::Expected warning-count=1, got '$WARNING_COUNT'"
+            exit 1
+          fi
+
+  range-fixture:
+    name: Range validation on a scratch repo
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Create a scratch repo with good and bad commits
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fixture"
+          cd "$RUNNER_TEMP/fixture"
+          git init -b main
+          git config user.email 'ci@example.com'
+          git config user.name 'CI'
+          git commit --allow-empty -m 'chore: init'
+          git commit --allow-empty -m 'feat: good one'
+          git commit --allow-empty -m 'bad commit message'
+          git commit --allow-empty -m 'fix: another good one'
+
+      - id: run
+        uses: ./
+        continue-on-error: true
+        with:
+          version: '0.3.0'
+          working-directory: ${{ runner.temp }}/fixture
+          base: HEAD~3
+
+      - name: Assert the bad commit failed the range
+        env:
+          STEP_OUTCOME: ${{ steps.run.outcome }}
+          VALID: ${{ steps.run.outputs.valid }}
+          COMMITS_COUNT: ${{ steps.run.outputs.commits-count }}
+          ERROR_COUNT: ${{ steps.run.outputs.error-count }}
+        run: |
+          set -euo pipefail
+          if [[ "$STEP_OUTCOME" != "failure" ]]; then
+            echo "::error::Expected the action step to fail on the bad commit, got outcome='$STEP_OUTCOME'"
+            exit 1
+          fi
+          if [[ "$VALID" != "false" ]]; then
+            echo "::error::Expected valid=false, got '$VALID'"
+            exit 1
+          fi
+          if [[ "$COMMITS_COUNT" != "3" ]]; then
+            echo "::error::Expected commits-count=3, got '$COMMITS_COUNT'"
+            exit 1
+          fi
+          if [[ ! "$ERROR_COUNT" =~ ^[0-9]+$ || "$ERROR_COUNT" -lt 1 ]]; then
+            echo "::error::Expected error-count >= 1, got '$ERROR_COUNT'"
+            exit 1
+          fi
+
+      - id: empty
+        uses: ./
+        with:
+          version: '0.3.0'
+          working-directory: ${{ runner.temp }}/fixture
+          base: HEAD
+
+      - name: Assert an empty range validates zero commits
+        env:
+          VALID: ${{ steps.empty.outputs.valid }}
+          COMMITS_COUNT: ${{ steps.empty.outputs.commits-count }}
+        run: |
+          set -euo pipefail
+          if [[ "$VALID" != "true" ]]; then
+            echo "::error::Expected valid=true on an empty range, got '$VALID'"
+            exit 1
+          fi
+          if [[ "$COMMITS_COUNT" != "0" ]]; then
+            echo "::error::Expected commits-count=0 on an empty range, got '$COMMITS_COUNT'"
+            exit 1
+          fi
+
+  invalid-input:
+    name: Invalid input is rejected up front
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: run
+        uses: ./
+        continue-on-error: true
+        with:
+          version: '0.3.0'
+          message: 'feat: add login'
+          format: xml
+
+      - name: Assert step failed before running the CLI
+        env:
+          STEP_OUTCOME: ${{ steps.run.outcome }}
+          VALID: ${{ steps.run.outputs.valid }}
+        run: |
+          set -euo pipefail
+          if [[ "$STEP_OUTCOME" != "failure" ]]; then
+            echo "::error::Expected the action to fail on invalid format, got outcome='$STEP_OUTCOME'"
+            exit 1
+          fi
+          if [[ -n "$VALID" ]]; then
+            echo "::error::Expected no outputs on up-front rejection, got valid='$VALID'"
+            exit 1
+          fi
+
+  sarif:
+    name: SARIF file output
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: run
+        uses: ./
+        with:
+          version: '0.3.0'
+          message: 'feat: add login'
+          sarif-file: results.sarif
+
+      - name: Assert the SARIF file exists and parses
+        env:
+          SARIF_PATH: ${{ steps.run.outputs.sarif-path }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f results.sarif ]]; then
+            echo "::error::Expected results.sarif to exist"
+            exit 1
+          fi
+          jq -e '.version == "2.1.0"' results.sarif > /dev/null
+          if [[ "$SARIF_PATH" != "$(realpath results.sarif)" ]]; then
+            echo "::error::Expected sarif-path to be $(realpath results.sarif), got '$SARIF_PATH'"
+            exit 1
+          fi
