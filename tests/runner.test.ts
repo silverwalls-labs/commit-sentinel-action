@@ -40,6 +40,8 @@ describe('runCli', () => {
     assert.equal(calls[0]!.options.cwd, '/work');
     assert.equal(calls[0]!.options.ignoreReturnCode, true);
     assert.equal(calls[0]!.options.silent, true);
+    assert.equal(calls[0]!.options.env.npm_config_loglevel, 'error');
+    assert.equal(calls[0]!.options.env.PATH, process.env.PATH);
   });
 
   it('defaults silent to false', async () => {
@@ -63,6 +65,23 @@ describe('runCli', () => {
 
     assert.equal(result.stdout, '{"valid":true}');
     assert.equal(result.stderr, 'warning');
+  });
+
+  it('reassembles a multi-byte UTF-8 sequence split across chunks', async () => {
+    const whole = Buffer.from('subject 🔥 body', 'utf8');
+    // Split inside the 4-byte fire emoji so each chunk ends mid-code-point.
+    const fire = Buffer.from('🔥', 'utf8');
+    const fireStart = whole.indexOf(fire);
+    const split = fireStart + 2;
+    const { exec } = makeExec((options) => {
+      options.listeners.stdout(whole.subarray(0, split));
+      options.listeners.stdout(whole.subarray(split));
+      return 0;
+    });
+
+    const result = await runCli({ version: 'latest', args: [], cwd: '.' }, exec);
+
+    assert.equal(result.stdout, 'subject 🔥 body');
   });
 
   it('passes through a non-zero exit code without throwing', async () => {

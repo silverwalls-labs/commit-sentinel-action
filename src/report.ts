@@ -86,9 +86,11 @@ export interface OutputDeps {
   warning: (msg: string) => void;
 }
 
-// GitHub caps a single output value at ~1 MB; above it, `report-json` is
-// skipped in favor of `report-path` rather than emitting a truncated value.
-export const MAX_INLINE_REPORT_BYTES = 1_000_000;
+// GitHub caps a single output value at ~1 MB, approximated in UTF-16 code
+// units; we budget conservatively at 1,000,000 UTF-16 bytes (2 bytes per
+// code unit). Above the cap, `report-json` is skipped in favor of
+// `report-path` rather than emitting a truncated value.
+export const MAX_INLINE_REPORT_UTF16_BYTES = 1_000_000;
 
 export function setOutputs(opts: PublishOptions, deps: OutputDeps): void {
   const { reports, agg, policyPassed } = opts;
@@ -106,21 +108,39 @@ export function setOutputs(opts: PublishOptions, deps: OutputDeps): void {
   const reportPath = writeReportFile(json);
   setOutput('report-path', reportPath);
 
-  // Byte length (not string length) is what counts against GitHub's cap.
-  const byteLength = Buffer.byteLength(json, 'utf8');
-  if (byteLength <= MAX_INLINE_REPORT_BYTES) {
+  // GitHub measures the output value in UTF-16 code units, not UTF-8 bytes.
+  const utf16Length = Buffer.byteLength(json, 'utf16le');
+  if (utf16Length <= MAX_INLINE_REPORT_UTF16_BYTES) {
     setOutput('report-json', json);
   } else {
     setOutput('report-json', '');
     warning(
-      `report-json omitted: report is ${byteLength} bytes, over the ${MAX_INLINE_REPORT_BYTES}-byte ` +
-        `output limit. Read the full report from the "report-path" output (${reportPath}) instead.`,
+      `report-json omitted: report is ${utf16Length} UTF-16 bytes, over the ` +
+        `${MAX_INLINE_REPORT_UTF16_BYTES}-byte output limit. Read the full report from the ` +
+        `"report-path" output (${reportPath}) instead.`,
     );
   }
 }
 
+// Backslashes must be escaped first, or a literal "\|" in the cell would be
+// seen as an escaped pipe rather than the two characters it is.
 function escapeCell(text: string): string {
-  return text.replaceAll('|', '\\|').replaceAll('\n', '<br>');
+  return text
+    .replaceAll('\\', '\\\\')
+    .replaceAll('|', '\\|')
+    .replaceAll('\n', '<br>');
+}
+
+// Renders a commit header as a Markdown code span. The fence must be longer
+// than the longest backtick run it contains; newlines are not allowed inside
+// a code span. Pipes need no escaping: a heading is not a table row.
+function formatCommitHeading(header: string): string {
+  let longestRun = 0;
+  for (const match of header.matchAll(/`+/g)) {
+    longestRun = Math.max(longestRun, match[0].length);
+  }
+  const fence = '`'.repeat(longestRun + 1);
+  return `${fence}${header.replaceAll('\n', ' ')}${fence}`;
 }
 
 // The CLI has no markdown formatter, so the summary is rendered here from the parsed report.
@@ -144,7 +164,7 @@ export function renderSummary(parsed: ParsedReports, agg: Aggregate): string {
   // The JSON report carries no SHA, so the commit header identifies each commit.
   for (const report of parsed.reports) {
     if (report.results.length === 0) continue;
-    lines.push('', `### \`${escapeCell(report.commit.header)}\``, '');
+    lines.push('', `### ${formatCommitHeading(report.commit.header)}`, '');
     lines.push('| Severity | Rule | Message | Suggestion |');
     lines.push('| --- | --- | --- | --- |');
     for (const result of report.results) {

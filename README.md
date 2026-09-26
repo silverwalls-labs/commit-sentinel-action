@@ -15,13 +15,13 @@ jobs:
   lint-commits:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: silverwalls-labs/commit-sentinel-action@v1
+      - uses: silverwalls-labs/commit-sentinel-action@v0
         with:
           base: origin/${{ github.event.pull_request.base.ref }}
 ```
@@ -40,8 +40,8 @@ on:
     branches: [main]
 
 steps:
-  - uses: actions/checkout@v4
-  - uses: silverwalls-labs/commit-sentinel-action@v1
+  - uses: actions/checkout@v7
+  - uses: silverwalls-labs/commit-sentinel-action@v0
     # No source input: defaults to validating HEAD.
 ```
 
@@ -49,8 +49,8 @@ steps:
 
 ```yaml
 steps:
-  - uses: actions/checkout@v4
-  - uses: silverwalls-labs/commit-sentinel-action@v1
+  - uses: actions/checkout@v7
+  - uses: silverwalls-labs/commit-sentinel-action@v0
     with:
       message: ${{ github.event.pull_request.title }}
 ```
@@ -59,7 +59,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: silverwalls-labs/commit-sentinel-action@v1
+  - uses: silverwalls-labs/commit-sentinel-action@v0
     with:
       base: origin/${{ github.event.pull_request.base.ref }}
       fail-on-warning: 'true'
@@ -69,7 +69,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: silverwalls-labs/commit-sentinel-action@v1
+  - uses: silverwalls-labs/commit-sentinel-action@v0
     id: sentinel
     continue-on-error: true
     with:
@@ -85,7 +85,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: silverwalls-labs/commit-sentinel-action@v1
+  - uses: silverwalls-labs/commit-sentinel-action@v0
     with:
       base: origin/${{ github.event.pull_request.base.ref }}
       config: lint/commit-sentinel.config.ts
@@ -120,15 +120,15 @@ Without `config`, the CLI resolves `commit-sentinel.config.ts` in the working di
 | `commits-count` | Number of commits validated. |
 | `error-count`   | Total rule violations at error level. |
 | `warning-count` | Total rule violations at warning level. |
-| `policy-passed` | `"true"` if the CLI exited 0 and `fail-on-warning` did not trip; `"false"` otherwise. |
-| `report-json`   | Full JSON report, inline — always a JSON array of `ValidationReport` (one entry per commit). Empty string when over GitHub's ~1 MB output limit; read `report-path` instead. |
+| `policy-passed` | `"true"` if the CLI exited 0 and `fail-on-warning` did not trip; `"false"` on a policy violation or a tripped `fail-on-warning`. Unset when the CLI errors before producing a report. |
+| `report-json`   | Full JSON report, inline — always a JSON array of `ValidationReport` (one entry per commit). Empty string when over GitHub's ~1 MB output limit (measured in UTF-16 code units); read `report-path` instead. |
 | `report-path`   | Filesystem path to the full JSON report (`$RUNNER_TEMP/commit-sentinel-report.json`). Always set. |
 | `sarif-path`    | Path to the SARIF report. Only set when the `sarif-file` input is provided. |
 
 Consume outputs from a later step:
 
 ```yaml
-- uses: silverwalls-labs/commit-sentinel-action@v1
+- uses: silverwalls-labs/commit-sentinel-action@v0
   id: sentinel
   with:
     base: origin/${{ github.event.pull_request.base.ref }}
@@ -145,7 +145,7 @@ The action is a thin wrapper — it does **not** vendor the CLI. Each run invoke
 npx --yes @silverwalls-labs/commit-sentinel@<version> [flags]
 ```
 
-so the action's git tag (e.g. `@v1`) and the CLI version evolve independently, the same way `setup-node` versions independently of Node itself. Pin the `version` input for reproducible runs.
+so the action's git tag (e.g. `@v0`) and the CLI version evolve independently, the same way `setup-node` versions independently of Node itself. Pin the `version` input for reproducible runs.
 
 Per run the action makes up to three CLI passes:
 

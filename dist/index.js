@@ -20180,6 +20180,9 @@ function error(message, properties = {}) {
 function warning(message, properties = {}) {
   issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
+function info(message) {
+  process.stdout.write(message + os5.EOL);
+}
 
 // src/main.ts
 import { resolve as resolve2 } from "node:path";
@@ -20257,8 +20260,8 @@ function buildArgs(config, options = {}) {
 
 // src/runner.ts
 async function runCli(opts, exec2) {
-  let stdout = "";
-  let stderr = "";
+  const stdoutChunks = [];
+  const stderrChunks = [];
   const exitCode = await exec2(
     "npx",
     ["--yes", `@silverwalls-labs/commit-sentinel@${opts.version}`, ...opts.args],
@@ -20266,17 +20269,26 @@ async function runCli(opts, exec2) {
       cwd: opts.cwd,
       ignoreReturnCode: true,
       silent: opts.silent ?? false,
+      // Suppress npm warn/notice chatter: on exit 2 the report is read from
+      // stderr and must parse, and a cold-cache npx can print install noise
+      // there. process.env must be spread along or the child loses PATH and
+      // npx can no longer resolve.
+      env: { ...process.env, npm_config_loglevel: "error" },
       listeners: {
         stdout: (data) => {
-          stdout += data.toString();
+          stdoutChunks.push(data);
         },
         stderr: (data) => {
-          stderr += data.toString();
+          stderrChunks.push(data);
         }
       }
     }
   );
-  return { exitCode, stdout, stderr };
+  return {
+    exitCode,
+    stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+    stderr: Buffer.concat(stderrChunks).toString("utf8")
+  };
 }
 
 // src/report.ts
@@ -20316,7 +20328,7 @@ function aggregate(reports) {
     warningCount: reports.reduce((sum, r) => sum + r.warningCount, 0)
   };
 }
-var MAX_INLINE_REPORT_BYTES = 1e6;
+var MAX_INLINE_REPORT_UTF16_BYTES = 1e6;
 function setOutputs(opts, deps) {
   const { reports, agg, policyPassed } = opts;
   const { setOutput: setOutput2, writeReportFile, warning: warning2 } = deps;
@@ -20328,18 +20340,26 @@ function setOutputs(opts, deps) {
   const json = JSON.stringify(reports);
   const reportPath = writeReportFile(json);
   setOutput2("report-path", reportPath);
-  const byteLength = Buffer.byteLength(json, "utf8");
-  if (byteLength <= MAX_INLINE_REPORT_BYTES) {
+  const utf16Length = Buffer.byteLength(json, "utf16le");
+  if (utf16Length <= MAX_INLINE_REPORT_UTF16_BYTES) {
     setOutput2("report-json", json);
   } else {
     setOutput2("report-json", "");
     warning2(
-      `report-json omitted: report is ${byteLength} bytes, over the ${MAX_INLINE_REPORT_BYTES}-byte output limit. Read the full report from the "report-path" output (${reportPath}) instead.`
+      `report-json omitted: report is ${utf16Length} UTF-16 bytes, over the ${MAX_INLINE_REPORT_UTF16_BYTES}-byte output limit. Read the full report from the "report-path" output (${reportPath}) instead.`
     );
   }
 }
 function escapeCell(text) {
-  return text.replaceAll("|", "\\|").replaceAll("\n", "<br>");
+  return text.replaceAll("\\", "\\\\").replaceAll("|", "\\|").replaceAll("\n", "<br>");
+}
+function formatCommitHeading(header) {
+  let longestRun = 0;
+  for (const match of header.matchAll(/`+/g)) {
+    longestRun = Math.max(longestRun, match[0].length);
+  }
+  const fence = "`".repeat(longestRun + 1);
+  return `${fence}${header.replaceAll("\n", " ")}${fence}`;
 }
 function renderSummary(parsed, agg) {
   const lines = ["## Commit Sentinel", ""];
@@ -20355,7 +20375,7 @@ function renderSummary(parsed, agg) {
   );
   for (const report of parsed.reports) {
     if (report.results.length === 0) continue;
-    lines.push("", `### \`${escapeCell(report.commit.header)}\``, "");
+    lines.push("", `### ${formatCommitHeading(report.commit.header)}`, "");
     lines.push("| Severity | Rule | Message | Suggestion |");
     lines.push("| --- | --- | --- | --- |");
     for (const result of report.results) {
@@ -20406,15 +20426,26 @@ async function orchestrate(deps) {
       warning: deps.warning
     }
   );
-  await runCli(
-    {
-      version: config.version,
-      args: buildArgs(config),
-      cwd: config.workingDirectory,
-      silent: false
-    },
-    deps.exec
-  );
+  if (config.format === "json") {
+    deps.info(selectReportText(jsonRun));
+  } else {
+    const formatRun = await runCli(
+      {
+        version: config.version,
+        args: buildArgs(config),
+        cwd: config.workingDirectory,
+        silent: false
+      },
+      deps.exec
+    );
+    if (classifyExit(formatRun.exitCode) === "error") {
+      if (formatRun.stderr.trim() !== "") deps.error(formatRun.stderr.trim());
+      deps.setFailed(
+        `commit-sentinel exited with code ${formatRun.exitCode}. See logs above.`
+      );
+      return;
+    }
+  }
   if (config.summary) {
     await writeStepSummary(renderSummary(parsed, agg), deps.writeSummary);
   }
@@ -20462,6 +20493,7 @@ orchestrate({
   setFailed: (m) => setFailed(m),
   error: (m) => error(m),
   warning: (m) => warning(m),
+  info: (m) => info(m),
   writeReportFile: (json) => {
     const dir = process.env.RUNNER_TEMP ?? tmpdir();
     const path4 = join3(dir, "commit-sentinel-report.json");

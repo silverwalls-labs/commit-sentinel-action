@@ -12,6 +12,7 @@ orchestrate({
   setFailed: (m) => core.setFailed(m),
   error: (m) => core.error(m),
   warning: (m) => core.warning(m),
+  info: (m) => core.info(m),
   writeReportFile: (json) => {
     const dir = process.env.RUNNER_TEMP ?? tmpdir();
     const path = join(dir, 'commit-sentinel-report.json');

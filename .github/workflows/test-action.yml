@@ -21,6 +21,7 @@ jobs:
       - id: run
         uses: ./
         with:
+          version: '0.3.0'
           message: 'feat: add login'
 
       - name: Assert outputs
@@ -64,6 +65,7 @@ jobs:
         uses: ./
         continue-on-error: true
         with:
+          version: '0.3.0'
           message: 'bad message'
 
       - name: Assert step failed with policy violation
@@ -107,6 +109,7 @@ jobs:
         uses: ./
         continue-on-error: true
         with:
+          version: '0.3.0'
           message: 'feat: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
           fail-on-warning: 'true'
 
@@ -148,6 +151,7 @@ jobs:
       - id: run
         uses: ./
         with:
+          version: '0.3.0'
           message: 'feat: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 
       - name: Assert warnings were reported but the policy passed
@@ -192,6 +196,7 @@ jobs:
         uses: ./
         continue-on-error: true
         with:
+          version: '0.3.0'
           working-directory: ${{ runner.temp }}/fixture
           base: HEAD~3
 
@@ -223,6 +228,7 @@ jobs:
       - id: empty
         uses: ./
         with:
+          version: '0.3.0'
           working-directory: ${{ runner.temp }}/fixture
           base: HEAD
 
@@ -255,6 +261,7 @@ jobs:
         uses: ./
         continue-on-error: true
         with:
+          version: '0.3.0'
           message: 'feat: add login'
           format: xml
 
@@ -286,6 +293,7 @@ jobs:
       - id: run
         uses: ./
         with:
+          version: '0.3.0'
           message: 'feat: add login'
           sarif-file: results.sarif
 

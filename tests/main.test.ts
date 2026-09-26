@@ -99,6 +99,7 @@ interface Ctx {
   failed: string[];
   errors: string[];
   warnings: string[];
+  infos: string[];
   reportWrites: string[];
   sarifWrites: { path: string; contents: string }[];
   summaryWrites: string[];
@@ -112,6 +113,7 @@ function makeDeps(config: Config, runs: ScriptedRun[]): Ctx {
   const failed: string[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
+  const infos: string[] = [];
   const reportWrites: string[] = [];
   const sarifWrites: { path: string; contents: string }[] = [];
   const summaryWrites: string[] = [];
@@ -145,6 +147,9 @@ function makeDeps(config: Config, runs: ScriptedRun[]): Ctx {
     warning: (msg) => {
       warnings.push(msg);
     },
+    info: (msg) => {
+      infos.push(msg);
+    },
     writeReportFile: (json) => {
       reportWrites.push(json);
       return '/tmp/commit-sentinel-report.json';
@@ -157,7 +162,7 @@ function makeDeps(config: Config, runs: ScriptedRun[]): Ctx {
     },
   };
 
-  return { deps, calls, outputs, failed, errors, warnings, reportWrites, sarifWrites, summaryWrites, log };
+  return { deps, calls, outputs, failed, errors, warnings, infos, reportWrites, sarifWrites, summaryWrites, log };
 }
 
 describe('orchestrate', () => {
@@ -395,15 +400,58 @@ describe('orchestrate', () => {
     assert.equal(ctx.outputs.size, 0);
   });
 
-  it('passes --json to the loud pass when format is json', async () => {
+  it('echoes the pass-1 JSON instead of re-running when format is json', async () => {
+    const json = JSON.stringify(validReport());
     const ctx = makeDeps(baseConfig({ format: 'json' }), [
-      { stdout: JSON.stringify(validReport()), exitCode: 0 },
-      { exitCode: 0 },
+      { stdout: json, exitCode: 0 },
     ]);
 
     await orchestrate(ctx.deps);
 
-    assert.deepEqual(ctx.calls[1]!.args, ['--yes', '@silverwalls-labs/commit-sentinel@latest', '--commit', 'HEAD', '--json']);
+    assert.equal(ctx.calls.length, 1);
+    assert.deepEqual(ctx.infos, [json]);
+  });
+
+  it('format json with an empty range: single call, info echoes the plain-text notice', async () => {
+    const emptyText = 'No commits found in range "main..HEAD".\n';
+    const ctx = makeDeps(
+      baseConfig({ format: 'json', target: { kind: 'range', value: 'main..HEAD' } }),
+      [{ stdout: emptyText, exitCode: 0 }],
+    );
+
+    await orchestrate(ctx.deps);
+
+    assert.equal(ctx.calls.length, 1);
+    assert.deepEqual(ctx.infos, [emptyText]);
+  });
+
+  it('loud human pass runtime error: surfaces stderr, fails after outputs, skips summary', async () => {
+    const ctx = makeDeps(baseConfig(), [
+      { stdout: JSON.stringify(validReport()), exitCode: 0 },
+      { stderr: 'fatal: bad object\n', exitCode: 1 },
+    ]);
+
+    await orchestrate(ctx.deps);
+
+    assert.equal(ctx.calls.length, 2);
+    assert.deepEqual(ctx.errors, ['fatal: bad object']);
+    assert.deepEqual(ctx.failed, ['commit-sentinel exited with code 1. See logs above.']);
+    assert.equal(ctx.outputs.get('policy-passed'), 'true');
+    assert.equal(ctx.outputs.get('report-path'), '/tmp/commit-sentinel-report.json');
+    assert.equal(ctx.summaryWrites.length, 0);
+  });
+
+  it('loud human pass runtime error with empty stderr: fails without an error annotation', async () => {
+    const ctx = makeDeps(baseConfig(), [
+      { stdout: JSON.stringify(validReport()), exitCode: 0 },
+      { stderr: '  \n', exitCode: 3 },
+    ]);
+
+    await orchestrate(ctx.deps);
+
+    assert.equal(ctx.errors.length, 0);
+    assert.deepEqual(ctx.failed, ['commit-sentinel exited with code 3. See logs above.']);
+    assert.equal(ctx.summaryWrites.length, 0);
   });
 
   it('passes --sarif to the loud pass when format is sarif', async () => {

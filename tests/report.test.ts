@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MAX_INLINE_REPORT_BYTES,
+  MAX_INLINE_REPORT_UTF16_BYTES,
   aggregate,
   classifyExit,
   parseReport,
@@ -202,10 +202,29 @@ describe('setOutputs', () => {
     assert.equal(ctx.warnings.length, 0);
   });
 
-  it('omits the inline report over the 1 MB cap but still writes the file', () => {
-    const big = validReport();
-    big.commit.body = 'x'.repeat(MAX_INLINE_REPORT_BYTES + 1);
-    const reports = [big];
+  it('inlines the report at exactly the UTF-16 byte cap', () => {
+    // 500,000 ASCII chars = 1,000,000 UTF-16 bytes: right at the cap.
+    const base = validReport();
+    base.commit.raw = '';
+    const bareLength = JSON.stringify([base]).length;
+    base.commit.raw = 'x'.repeat(MAX_INLINE_REPORT_UTF16_BYTES / 2 - bareLength);
+    const reports = [base];
+    const ctx = collect();
+
+    setOutputs({ reports, agg: aggregate(reports), policyPassed: true }, ctx.deps);
+
+    assert.equal(ctx.outputs.get('report-json'), JSON.stringify(reports));
+    assert.equal(ctx.warnings.length, 0);
+  });
+
+  it('omits the inline report one UTF-16 unit over the cap but still writes the file', () => {
+    // 500,001 ASCII chars = 1,000,002 UTF-16 bytes: over the cap even though
+    // the UTF-8 byte count (500,001) sits well under 1 MB.
+    const base = validReport();
+    base.commit.raw = '';
+    const bareLength = JSON.stringify([base]).length;
+    base.commit.raw = 'x'.repeat(MAX_INLINE_REPORT_UTF16_BYTES / 2 - bareLength + 1);
+    const reports = [base];
     const ctx = collect();
 
     setOutputs({ reports, agg: aggregate(reports), policyPassed: true }, ctx.deps);
@@ -214,7 +233,21 @@ describe('setOutputs', () => {
     assert.equal(ctx.outputs.get('report-path'), '/tmp/commit-sentinel-report.json');
     assert.deepEqual(ctx.reportWrites, [JSON.stringify(reports)]);
     assert.equal(ctx.warnings.length, 1);
-    assert.match(ctx.warnings[0]!, /report-path/);
+    assert.match(ctx.warnings[0]!, /UTF-16 bytes, over the 1000000-byte output limit/);
+  });
+
+  it('omits a multibyte-heavy report over the cap', () => {
+    // Each BMP char is one UTF-16 unit, so this measures at twice the cap's
+    // character budget, not its UTF-8 byte count.
+    const big = validReport();
+    big.commit.raw = 'é'.repeat(MAX_INLINE_REPORT_UTF16_BYTES / 2 + 1);
+    const reports = [big];
+    const ctx = collect();
+
+    setOutputs({ reports, agg: aggregate(reports), policyPassed: true }, ctx.deps);
+
+    assert.equal(ctx.outputs.get('report-json'), '');
+    assert.equal(ctx.warnings.length, 1);
   });
 });
 
@@ -246,12 +279,34 @@ describe('renderSummary', () => {
     assert.match(md, /\| warn \| header-max-length \| Header exceeds 100 characters\. \|  \|/);
   });
 
-  it('escapes pipes and newlines in cells', () => {
+  it('escapes pipes and newlines in cells, not in the heading', () => {
     const report = invalidReport('bad | header');
     report.results[0]!.problems = [{ message: 'line one\nline two | pipe' }];
     const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
-    assert.match(md, /### `bad \\\| header`/);
+    // A heading is not a table row, so its pipe renders literally.
+    assert.match(md, /### `bad \| header`/);
     assert.match(md, /line one<br>line two \\\| pipe/);
+  });
+
+  it('escapes a backslash before the pipe it escapes', () => {
+    const report = invalidReport();
+    report.results[0]!.problems = [{ message: 'a\\|b' }];
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    // "\\" renders as one backslash and "\|" as a literal pipe: a\|b.
+    assert.match(md, /\| a\\\\\\\|b \|/);
+  });
+
+  it('widens the heading fence around embedded backticks', () => {
+    const report = invalidReport('fix: use `backtick`');
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    // A two-backtick fence keeps the inner single backticks inside one span.
+    assert.match(md, /### ``fix: use `backtick```/);
+  });
+
+  it('flattens a newline in the commit header', () => {
+    const report = invalidReport('bad\nmessage');
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    assert.match(md, /### `bad message`/);
   });
 
   it('renders the empty-range notice', () => {

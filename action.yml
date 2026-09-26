@@ -68,7 +68,7 @@ outputs:
   warning-count:
     description: 'Total rule violations at warning level.'
   policy-passed:
-    description: '"true" if exit code was 0 and fail-on-warning did not trip; "false" otherwise.'
+    description: '"true" if the CLI exited 0 and fail-on-warning did not trip; "false" on a policy violation or a tripped fail-on-warning. Unset when the CLI errors before producing a report.'
   report-json:
     description: |
       Full JSON report, inline, always a JSON array of ValidationReport (one

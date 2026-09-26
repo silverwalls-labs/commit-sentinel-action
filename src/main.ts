@@ -25,6 +25,7 @@ export interface OrchestrateDeps {
   setFailed: (msg: string) => void;
   error: (msg: string) => void;
   warning: (msg: string) => void;
+  info: (msg: string) => void;
   writeReportFile: ReportFileWriter;
   writeSarifFile: SarifFileWriter;
   writeSummary: SummaryWriter;
@@ -71,16 +72,28 @@ export async function orchestrate(deps: OrchestrateDeps): Promise<void> {
   );
 
   // Second pass: the user's format, echoed to the log. Re-running the CLI keeps
-  // the output consistent with its own renderer instead of re-rendering JSON here.
-  await runCli(
-    {
-      version: config.version,
-      args: buildArgs(config),
-      cwd: config.workingDirectory,
-      silent: false,
-    },
-    deps.exec,
-  );
+  // the output consistent with its own renderer instead of re-rendering here.
+  // For json the pass-1 output is identical, so echo it instead of re-running.
+  if (config.format === 'json') {
+    deps.info(selectReportText(jsonRun));
+  } else {
+    const formatRun = await runCli(
+      {
+        version: config.version,
+        args: buildArgs(config),
+        cwd: config.workingDirectory,
+        silent: false,
+      },
+      deps.exec,
+    );
+    if (classifyExit(formatRun.exitCode) === 'error') {
+      if (formatRun.stderr.trim() !== '') deps.error(formatRun.stderr.trim());
+      deps.setFailed(
+        `commit-sentinel exited with code ${formatRun.exitCode}. See logs above.`,
+      );
+      return;
+    }
+  }
 
   if (config.summary) {
     await writeStepSummary(renderSummary(parsed, agg), deps.writeSummary);

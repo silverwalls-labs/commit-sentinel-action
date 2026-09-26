@@ -58,6 +58,7 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: ./
         with:
+          version: '0.3.0'
           base: origin/${{ github.event.pull_request.base.ref }}
 
       # base: HEAD~1 validates the pushed tip; when the tip is a merge commit
@@ -66,4 +67,5 @@ jobs:
         if: github.event_name == 'push'
         uses: ./
         with:
+          version: '0.3.0'
           base: HEAD~1
