@@ -147,10 +147,11 @@ npx --yes @silverwalls-labs/commit-sentinel@<version> [flags]
 
 so the action's git tag (e.g. `@v0`) and the CLI version evolve independently, the same way `setup-node` versions independently of Node itself. Pin the `version` input for reproducible runs.
 
-Per run the action makes up to two CLI passes:
+Per run the action makes up to three CLI passes:
 
 1. A silent `--json` pass to parse the report, publish outputs, and classify the exit code (`0` valid, `1` usage/runtime error, `2` validation failed). On exit `2`, outputs are published **before** the step is marked failed, so downstream steps can read them.
-2. An optional second pass with the requested `format` (or `--sarif` when `sarif-file` is set). When the format is `json`, the action echoes the pass-1 output directly. When `format` is `sarif` and `sarif-file` is set, the SARIF output is reused for both the log and the file.
+2. An optional pass with the requested `format`, echoed to the log inside a workflow-command suspension block. Skipped when `format` is `json` — the pass-1 output is echoed instead.
+3. When `sarif-file` is set and `format` is not `sarif`, a silent `--sarif` pass whose output is written to that path. When `format` is `sarif`, the pass-2 output is reused for the file and no third pass runs — unless the format pass failed or was truncated, in which case a dedicated `--sarif` pass runs.
 
 The Markdown step summary is rendered by the action from the parsed JSON report: overall status, error/warning counts, and a violations table per offending commit.
 

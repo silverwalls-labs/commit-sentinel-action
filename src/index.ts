@@ -4,15 +4,14 @@ import { dirname, join } from 'node:path';
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import { orchestrate, readInputs } from './main.ts';
+import { TIMEOUT_MARKER } from './runner.ts';
 
 orchestrate({
   readInputs,
   exec: (cmd, args, opts) => exec.exec(cmd, args, opts),
   setOutput: (name, value) => core.setOutput(name, value),
   setFailed: (m) => core.setFailed(m),
-  error: (m) => core.error(m),
   warning: (m) => core.warning(m),
-  info: (m) => core.info(m),
   writeLine: (text) => process.stdout.write(text + '\n'),
   writeReportFile: (json) => {
     // Allocate a unique private directory per invocation so that two steps in
@@ -40,6 +39,10 @@ orchestrate({
   const message = err instanceof Error ? err.message : String(err);
   core.setFailed(message);
   // On timeout, force exit: @actions/exec holds stdio pipes open and the
-  // child process keeps the event loop alive indefinitely (R10).
-  if (message.includes('timed out')) process.exit(1);
+  // child process keeps the event loop alive indefinitely (R10). The exit is
+  // delayed so the pending ::error:: annotation can flush to the runner —
+  // process.exit discards queued asynchronous pipe writes.
+  if (message.includes(TIMEOUT_MARKER)) {
+    setTimeout(() => process.exit(1), 1_000).unref();
+  }
 });

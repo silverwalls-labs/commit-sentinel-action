@@ -66,15 +66,48 @@ function validateReport(data: unknown): ValidationReport {
   if (!Array.isArray(obj.results)) {
     throw new Error('Report field "results" must be an array');
   }
+  for (let i = 0; i < obj.results.length; i++) {
+    const result = obj.results[i];
+    if (result === null || typeof result !== 'object') {
+      throw new Error(`Report field "results[${i}]" must be an object`);
+    }
+    const r = result as Record<string, unknown>;
+    assertType(`results[${i}].ruleName`, r.ruleName, 'string');
+    assertType(`results[${i}].severity`, r.severity, 'string');
+    if (!Array.isArray(r.problems)) {
+      throw new Error(`Report field "results[${i}].problems" must be an array`);
+    }
+    for (let j = 0; j < r.problems.length; j++) {
+      const problem = r.problems[j];
+      if (problem === null || typeof problem !== 'object') {
+        throw new Error(`Report field "results[${i}].problems[${j}]" must be an object`);
+      }
+      const p = problem as Record<string, unknown>;
+      assertType(`results[${i}].problems[${j}].message`, p.message, 'string');
+      if (p.suggestion !== undefined) {
+        assertType(`results[${i}].problems[${j}].suggestion`, p.suggestion, 'string');
+      }
+    }
+  }
 
   if (!Array.isArray(obj.skippedGitRules)) {
     throw new Error('Report field "skippedGitRules" must be an array');
+  }
+  for (let i = 0; i < obj.skippedGitRules.length; i++) {
+    assertType(`skippedGitRules[${i}]`, obj.skippedGitRules[i], 'string');
   }
 
   return data as ValidationReport;
 }
 
 // ── Report parsing ──────────────────────────────────────────────────────────
+
+// Neutralizes workflow-command syntax in CLI-derived text that is embedded
+// into annotations: the :: parser only fires at the start of a line, and the
+// legacy ##[ parser fires anywhere in a line (R01).
+function neutralizeCommands(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ').replaceAll('##[', '## [');
+}
 
 export function parseReport(text: string): ParsedReports {
   const trimmed = text.trim();
@@ -94,7 +127,7 @@ export function parseReport(text: string): ParsedReports {
     parsed = JSON.parse(trimmed);
   } catch (err) {
     throw new Error(
-      `Failed to parse commit-sentinel JSON report (output started with "${trimmed.slice(0, 80)}")`,
+      `Failed to parse commit-sentinel JSON report (output started with "${neutralizeCommands(trimmed.slice(0, 80))}")`,
       { cause: err },
     );
   }
@@ -139,7 +172,7 @@ export function validateSarifEnvelope(text: string): string | null {
   const obj = parsed as Record<string, unknown>;
 
   if (obj.version !== '2.1.0') {
-    return `unexpected version "${String(obj.version)}"`;
+    return `unexpected version "${neutralizeCommands(String(obj.version))}"`;
   }
   if (!Array.isArray(obj.runs)) return '"runs" is not an array';
 
@@ -272,7 +305,7 @@ export interface SummaryOptions {
 export function renderSummary(
   parsed: ParsedReports,
   agg: Aggregate,
-  options: SummaryOptions = { policyPassed: true, skippedGitRules: [] },
+  options: SummaryOptions,
 ): string {
   const lines: string[] = ['## Commit Sentinel', ''];
 
@@ -297,10 +330,11 @@ export function renderSummary(
     `**Commits:** ${agg.commitsCount} · **Errors:** ${agg.errorCount} · **Warnings:** ${agg.warningCount}`,
   );
 
-  // Show skipped rules if any (R15).
+  // Show skipped rules if any (R15). Rule names are config-derived text and
+  // are escaped like any other untrusted cell content (R13).
   if (options.skippedGitRules.length > 0) {
     lines.push(
-      `**Skipped rules** (not applicable for this input mode): ${options.skippedGitRules.join(', ')}`,
+      `**Skipped rules** (not applicable for this input mode): ${options.skippedGitRules.map(escapeCell).join(', ')}`,
     );
   }
 

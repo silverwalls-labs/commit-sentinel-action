@@ -36,11 +36,13 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "major=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-          echo "minor=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
-          echo "patch=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
-          echo "major_tag=v${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "major=${BASH_REMATCH[1]}"
+            echo "minor=${BASH_REMATCH[2]}"
+            echo "patch=${BASH_REMATCH[3]}"
+            echo "major_tag=v${BASH_REMATCH[1]}"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify release is newer than current major tag (R11)
         if: '!github.event.release.prerelease && steps.parse.outputs.skip != ''true'''
@@ -85,10 +87,23 @@ jobs:
           # a branch name which would resolve to the current branch tip.
           RELEASE_SHA=$(git rev-list -n 1 "$RELEASE_TAG")
           echo "Release tag $RELEASE_TAG resolves to commit $RELEASE_SHA"
-          STATUS=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/status" --jq '.state')
-          echo "Combined commit status: $STATUS"
-          if [[ "$STATUS" != "success" ]]; then
-            echo "::error::Release commit $RELEASE_SHA does not have passing checks (status: $STATUS). Refusing to promote."
+          # GitHub Actions reports through check runs; the legacy combined
+          # status endpoint does not include them (H03). per_page=100 so the
+          # check_runs array covers every run the total counts.
+          SUMMARY=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/check-runs?per_page=100" \
+            --jq '[.total_count, ([.check_runs[] | select(.conclusion == null)] | length), ([.check_runs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length)] | @tsv')
+          read -r TOTAL PENDING FAILED <<< "$SUMMARY"
+          echo "Check runs for $RELEASE_SHA: total=$TOTAL in_progress=$PENDING failed=$FAILED"
+          if [[ "$TOTAL" -eq 0 ]]; then
+            echo "::error::Release commit $RELEASE_SHA has no check runs. Refusing to promote an untested commit."
+            exit 1
+          fi
+          if [[ "$PENDING" -gt 0 ]]; then
+            echo "::error::$PENDING check run(s) for $RELEASE_SHA are still in progress. Refusing to promote."
+            exit 1
+          fi
+          if [[ "$FAILED" -gt 0 ]]; then
+            echo "::error::$FAILED check run(s) for $RELEASE_SHA did not succeed. Refusing to promote."
             exit 1
           fi
 

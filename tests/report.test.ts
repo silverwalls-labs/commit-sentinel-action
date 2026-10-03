@@ -80,6 +80,8 @@ function warnReport(header = 'feat: quite a long header'): ValidationReport {
   };
 }
 
+const PASSING_OPTIONS = { policyPassed: true, skippedGitRules: [] as string[] };
+
 describe('classifyExit', () => {
   it('classifies exit codes', () => {
     assert.equal(classifyExit(0), 'success');
@@ -143,6 +145,21 @@ describe('parseReport', () => {
   it('throws a descriptive error on malformed JSON', () => {
     assert.throws(() => parseReport('garbage{'), /Failed to parse commit-sentinel JSON report/);
   });
+
+  it('neutralizes workflow-command syntax in the parse-error preview (R01)', () => {
+    assert.throws(
+      () => parseReport('garbage\n::error::FORGED ##[error]LEGACY'),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        // No newline-started :: command and no mid-line ##[ sequence can
+        // survive into the annotation text.
+        assert.ok(!err.message.includes('\n::'));
+        assert.ok(!err.message.includes('##['));
+        assert.match(err.message, /::error::FORGED ## \[error\]LEGACY/);
+        return true;
+      },
+    );
+  });
 });
 
 describe('parseReport validation (R02)', () => {
@@ -195,6 +212,52 @@ describe('parseReport validation (R02)', () => {
     assert.throws(() => parseReport(JSON.stringify(report)), /Report field "skippedGitRules" must be an array/);
   });
 
+  it('accepts a fully populated nested report', () => {
+    const report = invalidReport();
+    const parsed = parseReport(JSON.stringify(report));
+    assert.deepEqual(parsed.reports, [report]);
+  });
+
+  it('rejects a results item that is not an object', () => {
+    const report = { ...validReport(), results: ['bad'] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /Report field "results\[0\]" must be an object/);
+  });
+
+  it('rejects a result with a non-string ruleName', () => {
+    const report = { ...validReport(), results: [{ severity: 'warn', problems: [] }] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /results\[0\].ruleName" must be string/);
+  });
+
+  it('rejects a result with a non-string severity', () => {
+    const report = { ...validReport(), results: [{ ruleName: 'format', severity: 3, problems: [] }] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /results\[0\].severity" must be string/);
+  });
+
+  it('rejects a result with problems that is not an array', () => {
+    const report = { ...validReport(), results: [{ ruleName: 'format', severity: 'warn', problems: 'bad' }] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /results\[0\].problems" must be an array/);
+  });
+
+  it('rejects a problem that is not an object', () => {
+    const report = { ...validReport(), results: [{ ruleName: 'format', severity: 'warn', problems: ['bad'] }] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /problems\[0\]" must be an object/);
+  });
+
+  it('rejects a problem without a message', () => {
+    const report = { ...validReport(), results: [{ ruleName: 'format', severity: 'warn', problems: [{ suggestion: 'x' }] }] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /problems\[0\].message" must be string/);
+  });
+
+  it('rejects a problem with a non-string suggestion', () => {
+    const report = { ...validReport(), results: [{ ruleName: 'format', severity: 'warn', problems: [{ message: 'm', suggestion: 7 }] }] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /problems\[0\].suggestion" must be string/);
+  });
+
+  it('rejects a non-string skippedGitRules element', () => {
+    const report = { ...validReport(), skippedGitRules: ['signed', 7] };
+    assert.throws(() => parseReport(JSON.stringify(report)), /skippedGitRules\[1\]" must be string/);
+  });
+
   it('wraps per-item validation errors with the index', () => {
     const reports = [validReport(), { bad: true }];
     assert.throws(() => parseReport(JSON.stringify(reports)), /Invalid report at index 1/);
@@ -220,6 +283,13 @@ describe('validateSarifEnvelope (R07)', () => {
 
   it('rejects wrong version', () => {
     assert.equal(validateSarifEnvelope('{"version":"1.0.0","runs":[]}'), 'unexpected version "1.0.0"');
+  });
+
+  it('neutralizes workflow-command syntax in the version message (R01)', () => {
+    const error = validateSarifEnvelope('{"version":"##[error]FORGED","runs":[]}');
+    assert.ok(error !== null);
+    assert.ok(!error.includes('##['));
+    assert.match(error, /## \[error\]FORGED/);
   });
 
   it('rejects missing runs', () => {
@@ -351,7 +421,7 @@ describe('setOutputs', () => {
 describe('renderSummary', () => {
   it('renders a fully valid run with no violation tables', () => {
     const reports = [validReport()];
-    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports));
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports), PASSING_OPTIONS);
     assert.match(md, /## Commit Sentinel/);
     assert.match(md, /\*\*Status:\*\* ✅ All commits valid/);
     assert.match(md, /\*\*Commits:\*\* 1 · \*\*Errors:\*\* 0 · \*\*Warnings:\*\* 0/);
@@ -360,7 +430,7 @@ describe('renderSummary', () => {
 
   it('renders one section per problematic commit, with empty suggestion cells', () => {
     const reports = [validReport(), invalidReport()];
-    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports));
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports), PASSING_OPTIONS);
     assert.match(md, /\*\*Status:\*\* ❌ 1 of 2 commit\(s\) invalid/);
     assert.match(md, /### `bad message`/);
     assert.match(md, /\| Severity \| Rule \| Message \| Suggestion \|/);
@@ -371,7 +441,7 @@ describe('renderSummary', () => {
 
   it('renders warning rows for a valid run with warnings', () => {
     const reports = [warnReport()];
-    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports));
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports), PASSING_OPTIONS);
     assert.match(md, /\*\*Status:\*\* ✅ All commits valid/);
     assert.match(md, /\| warn \| header-max-length \| Header exceeds 100 characters\. \|  \|/);
   });
@@ -379,7 +449,7 @@ describe('renderSummary', () => {
   it('escapes pipes and newlines in cells, not in the heading', () => {
     const report = invalidReport('bad | header');
     report.results[0]!.problems = [{ message: 'line one\nline two | pipe' }];
-    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]), PASSING_OPTIONS);
     // A heading is not a table row, so its pipe renders literally.
     assert.match(md, /### `bad \| header`/);
     assert.match(md, /line one<br>line two \\\| pipe/);
@@ -388,26 +458,26 @@ describe('renderSummary', () => {
   it('escapes a backslash before the pipe it escapes', () => {
     const report = invalidReport();
     report.results[0]!.problems = [{ message: 'a\\|b' }];
-    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]), PASSING_OPTIONS);
     // "\\" renders as one backslash and "\|" as a literal pipe: a\|b.
     assert.match(md, /\| a\\\\\\\|b \|/);
   });
 
   it('widens the heading fence around embedded backticks with padding (R13)', () => {
     const report = invalidReport('fix: use `backtick`');
-    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]), PASSING_OPTIONS);
     // A two-backtick fence with space padding keeps the inner backticks safe.
     assert.match(md, /### `` fix: use `backtick` ``/);
   });
 
   it('flattens a newline in the commit header', () => {
     const report = invalidReport('bad\nmessage');
-    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]), PASSING_OPTIONS);
     assert.match(md, /### `bad message`/);
   });
 
   it('renders the empty-range notice', () => {
-    const md = renderSummary({ reports: [], emptyRange: true }, aggregate([]));
+    const md = renderSummary({ reports: [], emptyRange: true }, aggregate([]), PASSING_OPTIONS);
     assert.match(md, /No commits found in range — nothing to validate\./);
     assert.doesNotMatch(md, /\*\*Status:\*\*/);
   });
@@ -430,10 +500,19 @@ describe('renderSummary', () => {
     assert.match(md, /\*\*Skipped rules\*\*.*signed, author-email/);
   });
 
+  it('escapes skipped rule names (R13)', () => {
+    const md = renderSummary({ reports: [], emptyRange: false }, aggregate([]), {
+      policyPassed: true,
+      skippedGitRules: ['<b>signed</b>'],
+    });
+    assert.match(md, /&lt;b&gt;signed&lt;\/b&gt;/);
+    assert.doesNotMatch(md, /<b>/);
+  });
+
   it('escapes HTML in cells (R13)', () => {
     const report = invalidReport();
     report.results[0]!.problems = [{ message: '<script>alert(1)</script>' }];
-    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]), PASSING_OPTIONS);
     assert.match(md, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.doesNotMatch(md, /<script>/);
   });
@@ -441,7 +520,7 @@ describe('renderSummary', () => {
   it('normalizes CR/CRLF in cells (R13)', () => {
     const report = invalidReport();
     report.results[0]!.problems = [{ message: 'line1\r\nline2\rline3' }];
-    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]), PASSING_OPTIONS);
     assert.match(md, /line1<br>line2<br>line3/);
   });
 
@@ -451,7 +530,7 @@ describe('renderSummary', () => {
       const r = invalidReport(`bad message ${i} ${'x'.repeat(100)}`);
       return r;
     });
-    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports));
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports), PASSING_OPTIONS);
     // Without truncation, 5000 reports would produce several MB.
     // The truncated summary should be roughly within 2× the budget.
     assert.ok(

@@ -98,9 +98,7 @@ interface Ctx {
   calls: ExecCall[];
   outputs: Map<string, string>;
   failed: string[];
-  errors: string[];
   warnings: string[];
-  infos: string[];
   writeLines: string[];
   reportWrites: string[];
   sarifWrites: { path: string; contents: string }[];
@@ -113,9 +111,7 @@ function makeDeps(config: Config, runs: ScriptedRun[]): Ctx {
   const calls: ExecCall[] = [];
   const outputs = new Map<string, string>();
   const failed: string[] = [];
-  const errors: string[] = [];
   const warnings: string[] = [];
-  const infos: string[] = [];
   const writeLines: string[] = [];
   const reportWrites: string[] = [];
   const sarifWrites: { path: string; contents: string }[] = [];
@@ -144,14 +140,8 @@ function makeDeps(config: Config, runs: ScriptedRun[]): Ctx {
       failed.push(msg);
       log.push('setFailed');
     },
-    error: (msg) => {
-      errors.push(msg);
-    },
     warning: (msg) => {
       warnings.push(msg);
-    },
-    info: (msg) => {
-      infos.push(msg);
     },
     writeLine: (text) => {
       writeLines.push(text);
@@ -168,7 +158,7 @@ function makeDeps(config: Config, runs: ScriptedRun[]): Ctx {
     },
   };
 
-  return { deps, calls, outputs, failed, errors, warnings, infos, writeLines, reportWrites, sarifWrites, summaryWrites, log };
+  return { deps, calls, outputs, failed, warnings, writeLines, reportWrites, sarifWrites, summaryWrites, log };
 }
 
 describe('orchestrate', () => {
@@ -193,7 +183,6 @@ describe('orchestrate', () => {
     assert.equal(ctx.summaryWrites.length, 1);
     assert.match(ctx.summaryWrites[0]!, /## Commit Sentinel/);
     assert.equal(ctx.failed.length, 0);
-    assert.equal(ctx.errors.length, 0);
     // Verify the workflow-command suspension envelope (R01).
     assert.equal(ctx.writeLines.length, 3);
     assert.match(ctx.writeLines[0]!, /^::stop-commands::/);
@@ -233,13 +222,17 @@ describe('orchestrate', () => {
     assert.equal(ctx.summaryWrites.length, 1);
   });
 
-  it('runtime error: surfaces stderr, fails immediately, sets no outputs', async () => {
+  it('runtime error: emits stderr in a suspension block, fails immediately, sets no outputs', async () => {
     const ctx = makeDeps(baseConfig(), [{ stderr: 'fatal: bad ref\n', exitCode: 1 }]);
 
     await orchestrate(ctx.deps);
 
     assert.equal(ctx.calls.length, 1);
-    assert.deepEqual(ctx.errors, ['fatal: bad ref']);
+    // Stderr is untrusted CLI output — it must be suspended (R01).
+    assert.equal(ctx.writeLines.length, 3);
+    assert.match(ctx.writeLines[0]!, /^::stop-commands::/);
+    assert.equal(ctx.writeLines[1]!, 'fatal: bad ref');
+    assert.match(ctx.writeLines[2]!, /^::[0-9a-f-]+::$/);
     assert.deepEqual(ctx.failed, ['commit-sentinel exited with code 1. See logs above.']);
     assert.equal(ctx.outputs.size, 0);
     assert.equal(ctx.summaryWrites.length, 0);
@@ -263,13 +256,28 @@ describe('orchestrate', () => {
     assert.equal(ctx.outputs.size, 0);
   });
 
-  it('runtime error with empty stderr: still fails, no error annotation', async () => {
+  it('runtime error with empty stderr: still fails, no suspension block', async () => {
     const ctx = makeDeps(baseConfig(), [{ stderr: '  \n', exitCode: 3 }]);
 
     await orchestrate(ctx.deps);
 
-    assert.equal(ctx.errors.length, 0);
+    assert.equal(ctx.writeLines.length, 0);
     assert.deepEqual(ctx.failed, ['commit-sentinel exited with code 3. See logs above.']);
+  });
+
+  it('runtime error with truncated stderr: warns about truncation (R09)', async () => {
+    const ctx = makeDeps(baseConfig(), []);
+    ctx.deps.exec = async (_cmd, _args, options) => {
+      options.listeners.stderr(Buffer.alloc(MAX_BUFFER_BYTES + 1, 'x'));
+      options.listeners.stderr(Buffer.from('overflow'));
+      return 1;
+    };
+
+    await orchestrate(ctx.deps);
+
+    assert.ok(ctx.warnings.some((w) => w.includes('exceeded the 10 MiB buffer limit')));
+    assert.deepEqual(ctx.failed, ['commit-sentinel exited with code 1. See logs above.']);
+    assert.equal(ctx.outputs.size, 0);
   });
 
   it('fail-on-warning trips on warnings: outputs first, then warning and setFailed', async () => {
@@ -430,7 +438,96 @@ describe('orchestrate', () => {
     assert.equal(ctx.outputs.size, 0);
   });
 
-  it('echoes the pass-1 JSON instead of re-running when format is json', async () => {
+  it('exit 0 with an invalid report is a contract violation, not a pass (R02)', async () => {
+    const ctx = makeDeps(baseConfig(), [
+      { stdout: JSON.stringify(invalidReport()), exitCode: 0 },
+    ]);
+
+    await assert.rejects(orchestrate(ctx.deps), /exited 0 but reported/);
+    assert.equal(ctx.outputs.size, 0);
+  });
+
+  it('exit 2 with an all-valid report is a contract violation (R02)', async () => {
+    const ctx = makeDeps(baseConfig(), [
+      { stdout: JSON.stringify(validReport()), exitCode: 2 },
+    ]);
+
+    await assert.rejects(orchestrate(ctx.deps), /exited 2 but reported all commits valid/);
+    assert.equal(ctx.outputs.size, 0);
+  });
+
+  it('empty-range output for a single-target mode is a contract violation (R02)', async () => {
+    const emptyText = 'No commits found in range "main..HEAD".\n';
+    const ctx = makeDeps(baseConfig(), [{ stdout: emptyText, exitCode: 0 }]);
+
+    await assert.rejects(orchestrate(ctx.deps), /empty range for the "commit" target/);
+    assert.equal(ctx.outputs.size, 0);
+  });
+
+  it('empty range for a base target is legitimate, not a contract violation (R02)', async () => {
+    const emptyText = 'No commits found in range "main..HEAD".\n';
+    const ctx = makeDeps(baseConfig({ target: { kind: 'base', value: 'origin/main' } }), [
+      { stdout: emptyText, exitCode: 0 },
+      { stdout: emptyText, exitCode: 0 },
+    ]);
+
+    await orchestrate(ctx.deps);
+
+    assert.equal(ctx.outputs.get('commits-count'), '0');
+    assert.equal(ctx.outputs.get('policy-passed'), 'true');
+    assert.equal(ctx.failed.length, 0);
+  });
+
+  it('format pass truncation warns and prevents SARIF reuse (R09)', async () => {
+    const sarifContent = '{"version":"2.1.0","runs":[]}';
+    const ctx = makeDeps(baseConfig({ format: 'sarif', sarifFile: 'out.sarif' }), []);
+    let call = 0;
+    ctx.deps.exec = async (_cmd, _args, options) => {
+      call += 1;
+      if (call === 1) {
+        options.listeners.stdout(Buffer.from(JSON.stringify(validReport())));
+        return 0;
+      }
+      if (call === 2) {
+        options.listeners.stdout(Buffer.alloc(MAX_BUFFER_BYTES + 1, 'x'));
+        options.listeners.stdout(Buffer.from('overflow'));
+        return 0;
+      }
+      options.listeners.stdout(Buffer.from(sarifContent));
+      return 0;
+    };
+
+    await orchestrate(ctx.deps);
+
+    // The truncated format pass is not reused — a dedicated SARIF pass runs.
+    assert.equal(call, 3);
+    assert.ok(ctx.warnings.some((w) => w.includes('Format pass output exceeded the 10 MiB buffer limit')));
+    assert.deepEqual(ctx.sarifWrites, [{ path: resolve('.', 'out.sarif'), contents: sarifContent }]);
+  });
+
+  it('SARIF pass truncation warns and skips the file (R09)', async () => {
+    const ctx = makeDeps(baseConfig({ sarifFile: 'out.sarif' }), []);
+    let call = 0;
+    ctx.deps.exec = async (_cmd, _args, options) => {
+      call += 1;
+      if (call === 1) {
+        options.listeners.stdout(Buffer.from(JSON.stringify(validReport())));
+        return 0;
+      }
+      if (call === 2) return 0;
+      options.listeners.stdout(Buffer.alloc(MAX_BUFFER_BYTES + 1, 'x'));
+      options.listeners.stdout(Buffer.from('overflow'));
+      return 0;
+    };
+
+    await orchestrate(ctx.deps);
+
+    assert.ok(ctx.warnings.some((w) => w.includes('SARIF pass output exceeded the 10 MiB buffer limit')));
+    assert.equal(ctx.sarifWrites.length, 0);
+    assert.equal(ctx.outputs.has('sarif-path'), false);
+  });
+
+  it('echoes the pass-1 JSON in a suspension block instead of re-running when format is json', async () => {
     const json = JSON.stringify(validReport());
     const ctx = makeDeps(baseConfig({ format: 'json' }), [
       { stdout: json, exitCode: 0 },
@@ -439,10 +536,14 @@ describe('orchestrate', () => {
     await orchestrate(ctx.deps);
 
     assert.equal(ctx.calls.length, 1);
-    assert.deepEqual(ctx.infos, [json]);
+    // The report JSON carries commit-message text — suspended, not info'd (R01).
+    assert.equal(ctx.writeLines.length, 3);
+    assert.match(ctx.writeLines[0]!, /^::stop-commands::/);
+    assert.equal(ctx.writeLines[1]!, json);
+    assert.match(ctx.writeLines[2]!, /^::[0-9a-f-]+::$/);
   });
 
-  it('format json with an empty range: single call, info echoes the plain-text notice', async () => {
+  it('format json with an empty range: single call, suspended echo of the plain-text notice', async () => {
     const emptyText = 'No commits found in range "main..HEAD".\n';
     const ctx = makeDeps(
       baseConfig({ format: 'json', target: { kind: 'range', value: 'main..HEAD' } }),
@@ -452,7 +553,8 @@ describe('orchestrate', () => {
     await orchestrate(ctx.deps);
 
     assert.equal(ctx.calls.length, 1);
-    assert.deepEqual(ctx.infos, [emptyText]);
+    assert.equal(ctx.writeLines.length, 3);
+    assert.equal(ctx.writeLines[1]!, 'No commits found in range "main..HEAD".');
   });
 
   it('format pass error: warns but does not fail the action (R03)', async () => {
@@ -526,6 +628,21 @@ describe('orchestrate', () => {
     assert.equal(ctx.failed.length, 1);
   });
 
+  it('summary write rejection of a non-Error still warns with a string (R16)', async () => {
+    const ctx = makeDeps(baseConfig(), [
+      { stdout: JSON.stringify(validReport()), exitCode: 0 },
+      { exitCode: 0 },
+    ]);
+    ctx.deps.writeSummary = async () => {
+      throw 'summary kaboom';
+    };
+
+    await orchestrate(ctx.deps);
+
+    assert.ok(ctx.warnings.some((w) => w.includes('Failed to write step summary: summary kaboom')));
+    assert.equal(ctx.failed.length, 0);
+  });
+
   it('SARIF write failure warns but does not block policy (R16)', async () => {
     const ctx = makeDeps(baseConfig({ sarifFile: 'results.sarif' }), [
       { stdout: JSON.stringify(invalidReport()), exitCode: 2 },
@@ -542,6 +659,22 @@ describe('orchestrate', () => {
     // Policy failure was still reported.
     assert.equal(ctx.failed.length, 1);
     assert.match(ctx.failed[0]!, /Commit validation failed/);
+  });
+
+  it('SARIF write rejection of a non-Error still warns with a string (R16)', async () => {
+    const ctx = makeDeps(baseConfig({ sarifFile: 'results.sarif' }), [
+      { stdout: JSON.stringify(validReport()), exitCode: 0 },
+      { exitCode: 0 },
+      { stdout: '{"version":"2.1.0","runs":[]}', exitCode: 0 },
+    ]);
+    ctx.deps.writeSarifFile = () => {
+      throw 'sarif kaboom';
+    };
+
+    await orchestrate(ctx.deps);
+
+    assert.ok(ctx.warnings.some((w) => w.includes('Failed to write SARIF file: sarif kaboom')));
+    assert.equal(ctx.failed.length, 0);
   });
 
   it('invalid SARIF envelope warns and skips the file (R07)', async () => {

@@ -40,6 +40,10 @@ export const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 // rather than waiting for an external job timeout (R10).
 export const DEFAULT_TIMEOUT_MS = 300_000;
 
+// Stable prefix of the timeout error message. index.ts matches on it to
+// force-exit past the hung child's open stdio pipes.
+export const TIMEOUT_MARKER = 'commit-sentinel timed out';
+
 export async function runCli(opts: RunOptions, exec: ExecFn): Promise<RunResult> {
   // Buffer the chunks and decode once per stream: decoding each chunk in
   // isolation corrupts a multi-byte UTF-8 sequence split across chunks.
@@ -89,7 +93,7 @@ export async function runCli(opts: RunOptions, exec: ExecFn): Promise<RunResult>
     execPromise,
     new Promise<never>((_, reject) => {
       setTimeout(
-        () => reject(new Error(`commit-sentinel timed out after ${timeoutMs}ms`)),
+        () => reject(new Error(`${TIMEOUT_MARKER} after ${timeoutMs}ms`)),
         timeoutMs,
       ).unref();
     }),

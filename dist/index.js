@@ -20180,9 +20180,6 @@ function error(message, properties = {}) {
 function warning(message, properties = {}) {
   issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
-function info(message) {
-  process.stdout.write(message + os5.EOL);
-}
 
 // src/main.ts
 import { resolve as resolve2 } from "node:path";
@@ -20276,6 +20273,7 @@ function buildArgs(config, options = {}) {
 // src/runner.ts
 var MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 var DEFAULT_TIMEOUT_MS = 3e5;
+var TIMEOUT_MARKER = "commit-sentinel timed out";
 async function runCli(opts, exec2) {
   const stdoutChunks = [];
   const stderrChunks = [];
@@ -20319,7 +20317,7 @@ async function runCli(opts, exec2) {
     execPromise,
     new Promise((_, reject) => {
       setTimeout(
-        () => reject(new Error(`commit-sentinel timed out after ${timeoutMs}ms`)),
+        () => reject(new Error(`${TIMEOUT_MARKER} after ${timeoutMs}ms`)),
         timeoutMs
       ).unref();
     })
@@ -20376,10 +20374,39 @@ function validateReport(data) {
   if (!Array.isArray(obj.results)) {
     throw new Error('Report field "results" must be an array');
   }
+  for (let i = 0; i < obj.results.length; i++) {
+    const result = obj.results[i];
+    if (result === null || typeof result !== "object") {
+      throw new Error(`Report field "results[${i}]" must be an object`);
+    }
+    const r = result;
+    assertType(`results[${i}].ruleName`, r.ruleName, "string");
+    assertType(`results[${i}].severity`, r.severity, "string");
+    if (!Array.isArray(r.problems)) {
+      throw new Error(`Report field "results[${i}].problems" must be an array`);
+    }
+    for (let j = 0; j < r.problems.length; j++) {
+      const problem = r.problems[j];
+      if (problem === null || typeof problem !== "object") {
+        throw new Error(`Report field "results[${i}].problems[${j}]" must be an object`);
+      }
+      const p = problem;
+      assertType(`results[${i}].problems[${j}].message`, p.message, "string");
+      if (p.suggestion !== void 0) {
+        assertType(`results[${i}].problems[${j}].suggestion`, p.suggestion, "string");
+      }
+    }
+  }
   if (!Array.isArray(obj.skippedGitRules)) {
     throw new Error('Report field "skippedGitRules" must be an array');
   }
+  for (let i = 0; i < obj.skippedGitRules.length; i++) {
+    assertType(`skippedGitRules[${i}]`, obj.skippedGitRules[i], "string");
+  }
   return data;
+}
+function neutralizeCommands(text) {
+  return text.replace(/[\r\n]+/g, " ").replaceAll("##[", "## [");
 }
 function parseReport(text) {
   const trimmed = text.trim();
@@ -20394,7 +20421,7 @@ function parseReport(text) {
     parsed = JSON.parse(trimmed);
   } catch (err) {
     throw new Error(
-      `Failed to parse commit-sentinel JSON report (output started with "${trimmed.slice(0, 80)}")`,
+      `Failed to parse commit-sentinel JSON report (output started with "${neutralizeCommands(trimmed.slice(0, 80))}")`,
       { cause: err }
     );
   }
@@ -20426,7 +20453,7 @@ function validateSarifEnvelope(text) {
   if (parsed === null || typeof parsed !== "object") return "not a JSON object";
   const obj = parsed;
   if (obj.version !== "2.1.0") {
-    return `unexpected version "${String(obj.version)}"`;
+    return `unexpected version "${neutralizeCommands(String(obj.version))}"`;
   }
   if (!Array.isArray(obj.runs)) return '"runs" is not an array';
   return null;
@@ -20477,7 +20504,7 @@ function formatCommitHeading(header) {
 }
 var MAX_SUMMARY_BYTES = 1e6;
 var TRUNCATION_NOTICE = "\n\n> **Note:** Summary truncated. Full report available via the `report-path` output.\n";
-function renderSummary(parsed, agg, options = { policyPassed: true, skippedGitRules: [] }) {
+function renderSummary(parsed, agg, options) {
   const lines = ["## Commit Sentinel", ""];
   if (parsed.emptyRange) {
     lines.push("No commits found in range \u2014 nothing to validate.");
@@ -20498,7 +20525,7 @@ function renderSummary(parsed, agg, options = { policyPassed: true, skippedGitRu
   );
   if (options.skippedGitRules.length > 0) {
     lines.push(
-      `**Skipped rules** (not applicable for this input mode): ${options.skippedGitRules.join(", ")}`
+      `**Skipped rules** (not applicable for this input mode): ${options.skippedGitRules.map(escapeCell).join(", ")}`
     );
   }
   const headerSize = Buffer.byteLength(lines.join("\n") + "\n", "utf8");
@@ -20535,6 +20562,13 @@ async function writeStepSummary(markdown, writer) {
 }
 
 // src/main.ts
+function emitSuspended(text, deps) {
+  if (text === "") return;
+  const token = crypto.randomUUID();
+  deps.writeLine(`::stop-commands::${token}`);
+  deps.writeLine(text.replace(/\n$/, ""));
+  deps.writeLine(`::${token}::`);
+}
 async function orchestrate(deps) {
   const config = deps.readInputs();
   const jsonRun = await runCli(
@@ -20548,7 +20582,10 @@ async function orchestrate(deps) {
   );
   const classification = classifyExit(jsonRun.exitCode);
   if (classification === "error") {
-    if (jsonRun.stderr.trim() !== "") deps.error(jsonRun.stderr.trim());
+    if (jsonRun.truncated) {
+      deps.warning("commit-sentinel output exceeded the 10 MiB buffer limit and was truncated.");
+    }
+    emitSuspended(jsonRun.stderr.trim(), deps);
     deps.setFailed(
       `commit-sentinel exited with code ${jsonRun.exitCode}. See logs above.`
     );
@@ -20562,6 +20599,19 @@ async function orchestrate(deps) {
   }
   const parsed = parseReport(selectReportText(jsonRun));
   const agg = aggregate(parsed.reports);
+  if (classification === "success" && !agg.valid) {
+    throw new Error(`Report contract violation: commit-sentinel exited 0 but reported ${agg.errorCount} error(s).`);
+  }
+  if (classification === "policy-violation" && agg.valid) {
+    throw new Error(
+      "Report contract violation: commit-sentinel exited 2 but reported all commits valid."
+    );
+  }
+  if (parsed.emptyRange && config.target.kind !== "range" && config.target.kind !== "base") {
+    throw new Error(
+      `Report contract violation: commit-sentinel reported an empty range for the "${config.target.kind}" target.`
+    );
+  }
   const warningTripped = config.failOnWarning && agg.warningCount > 0;
   const policyPassed = classification === "success" && !warningTripped;
   const skippedGitRules = Array.from(new Set(parsed.reports.flatMap((r) => r.skippedGitRules)));
@@ -20575,7 +20625,7 @@ async function orchestrate(deps) {
   );
   let formatPassOutput = null;
   if (config.format === "json") {
-    deps.info(selectReportText(jsonRun));
+    emitSuspended(selectReportText(jsonRun), deps);
   } else {
     const formatRun = await runCli(
       {
@@ -20591,14 +20641,11 @@ async function orchestrate(deps) {
         `Format pass exited with code ${formatRun.exitCode}; output may be incomplete.`
       );
     }
-    const output = formatRun.stdout + formatRun.stderr;
-    if (output !== "") {
-      const token = crypto.randomUUID();
-      deps.writeLine(`::stop-commands::${token}`);
-      deps.writeLine(output);
-      deps.writeLine(`::${token}::`);
+    if (formatRun.truncated) {
+      deps.warning("Format pass output exceeded the 10 MiB buffer limit and was truncated.");
     }
-    if (config.format === "sarif" && classifyExit(formatRun.exitCode) !== "error") {
+    emitSuspended(formatRun.stdout + formatRun.stderr, deps);
+    if (config.format === "sarif" && !formatRun.truncated && classifyExit(formatRun.exitCode) !== "error") {
       formatPassOutput = selectReportText(formatRun);
     }
   }
@@ -20619,7 +20666,7 @@ async function orchestrate(deps) {
       if (parsed.emptyRange) {
         deps.warning("No commits found in range; sarif-file was not written.");
       } else if (config.format === "sarif" && formatPassOutput !== null) {
-        writeSarif(config, formatPassOutput, deps);
+        writeSarif(config, config.sarifFile, formatPassOutput, deps);
       } else {
         const sarifRun = await runCli(
           {
@@ -20630,12 +20677,16 @@ async function orchestrate(deps) {
           },
           deps.exec
         );
-        if (classifyExit(sarifRun.exitCode) === "error") {
+        if (sarifRun.truncated) {
+          deps.warning(
+            "SARIF pass output exceeded the 10 MiB buffer limit; sarif-file was not written."
+          );
+        } else if (classifyExit(sarifRun.exitCode) === "error") {
           deps.warning(
             `SARIF pass exited with code ${sarifRun.exitCode}; sarif-file was not written.`
           );
         } else {
-          writeSarif(config, selectReportText(sarifRun), deps);
+          writeSarif(config, config.sarifFile, selectReportText(sarifRun), deps);
         }
       }
     } catch (err) {
@@ -20655,13 +20706,13 @@ async function orchestrate(deps) {
     deps.setFailed("Commit validation reported warnings and fail-on-warning is enabled.");
   }
 }
-function writeSarif(config, sarifText, deps) {
+function writeSarif(config, sarifFile, sarifText, deps) {
   const error2 = validateSarifEnvelope(sarifText);
   if (error2 !== null) {
     deps.warning(`SARIF output is invalid (${error2}); sarif-file was not written.`);
     return;
   }
-  const sarifPath = resolve2(config.workingDirectory, config.sarifFile);
+  const sarifPath = resolve2(config.workingDirectory, sarifFile);
   deps.writeSarifFile(sarifPath, sarifText);
   deps.setOutput("sarif-path", sarifPath);
 }
@@ -20672,9 +20723,7 @@ orchestrate({
   exec: (cmd, args, opts) => exec(cmd, args, opts),
   setOutput: (name, value) => setOutput(name, value),
   setFailed: (m) => setFailed(m),
-  error: (m) => error(m),
   warning: (m) => warning(m),
-  info: (m) => info(m),
   writeLine: (text) => process.stdout.write(text + "\n"),
   writeReportFile: (json) => {
     const base = process.env.RUNNER_TEMP ?? tmpdir();
@@ -20695,7 +20744,9 @@ orchestrate({
 }).catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
   setFailed(message);
-  if (message.includes("timed out")) process.exit(1);
+  if (message.includes(TIMEOUT_MARKER)) {
+    setTimeout(() => process.exit(1), 1e3).unref();
+  }
 });
 /*! Bundled license information:
 
