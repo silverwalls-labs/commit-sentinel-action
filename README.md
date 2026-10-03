@@ -100,7 +100,7 @@ Without `config`, the CLI resolves `commit-sentinel.config.ts` in the working di
 | `version`           | `latest` | Version spec of `@silverwalls-labs/commit-sentinel` to run via `npx --yes`. Accepts any spec npm understands — pin (e.g. `0.2.0`) for reproducible builds. |
 | `working-directory` | `.`      | Directory to run the CLI in (passed as cwd). |
 | `message`           | —        | Validate a literal commit message string. |
-| `file`              | —        | Validate the first line of a commit message file, e.g. `.git/COMMIT_EDITMSG`. |
+| `file`              | —        | Validate a commit message file, e.g. `.git/COMMIT_EDITMSG`. |
 | `commit`            | —        | Git ref whose commit message to validate. Defaults to `HEAD` when no source input is set. |
 | `range`             | —        | Git range to validate, e.g. `main..HEAD`. |
 | `base`              | —        | PR shorthand: validate all commits from `<ref>..HEAD`. |
@@ -122,7 +122,7 @@ Without `config`, the CLI resolves `commit-sentinel.config.ts` in the working di
 | `warning-count` | Total rule violations at warning level. |
 | `policy-passed` | `"true"` if the CLI exited 0 and `fail-on-warning` did not trip; `"false"` on a policy violation or a tripped `fail-on-warning`. Unset when the CLI errors before producing a report. |
 | `report-json`   | Full JSON report, inline — always a JSON array of `ValidationReport` (one entry per commit). Empty string when over GitHub's ~1 MB output limit (measured in UTF-16 code units); read `report-path` instead. |
-| `report-path`   | Filesystem path to the full JSON report (`$RUNNER_TEMP/commit-sentinel-report.json`). Always set. |
+| `report-path`   | Filesystem path to the full JSON report (written to a unique temp directory per invocation). Set when the CLI produces a valid report. |
 | `sarif-path`    | Path to the SARIF report. Only set when the `sarif-file` input is provided. |
 
 Consume outputs from a later step:
@@ -147,11 +147,10 @@ npx --yes @silverwalls-labs/commit-sentinel@<version> [flags]
 
 so the action's git tag (e.g. `@v0`) and the CLI version evolve independently, the same way `setup-node` versions independently of Node itself. Pin the `version` input for reproducible runs.
 
-Per run the action makes up to three CLI passes:
+Per run the action makes up to two CLI passes:
 
 1. A silent `--json` pass to parse the report, publish outputs, and classify the exit code (`0` valid, `1` usage/runtime error, `2` validation failed). On exit `2`, outputs are published **before** the step is marked failed, so downstream steps can read them.
-2. A pass with your chosen `format`, echoed to the action log.
-3. When `sarif-file` is set, a silent `--sarif` pass whose output is written to that path.
+2. An optional second pass with the requested `format` (or `--sarif` when `sarif-file` is set). When the format is `json`, the action echoes the pass-1 output directly. When `format` is `sarif` and `sarif-file` is set, the SARIF output is reused for both the log and the file.
 
 The Markdown step summary is rendered by the action from the parsed JSON report: overall status, error/warning counts, and a violations table per offending commit.
 

@@ -99,6 +99,16 @@ describe('readInputs', () => {
     assert.throws(() => readInputs(), TypeError);
   });
 
+  it('preserves leading and trailing whitespace in the message input (R04)', () => {
+    setInput('message', '\nfeat: ok\n');
+    assert.deepEqual(readInputs().target, { kind: 'message', value: '\nfeat: ok\n' });
+  });
+
+  it('rejects a whitespace-only message input (R04)', () => {
+    setInput('message', '  \n  ');
+    assert.throws(() => readInputs(), /Input 'message' must not be blank when provided/);
+  });
+
   it('reads version, working-directory, config, and sarif-file overrides', () => {
     setInput('version', '0.2.0');
     setInput('working-directory', 'packages/app');

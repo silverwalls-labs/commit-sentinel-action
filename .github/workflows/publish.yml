@@ -4,27 +4,101 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   move-major-tag:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: Move v<major> tag to release commit
+      - name: Skip prereleases (R11)
+        if: github.event.release.prerelease
+        run: |
+          echo "::notice::Skipping major-tag promotion for prerelease."
+          exit 0
+
+      - name: Validate stable vMAJOR.MINOR.PATCH tag
+        if: '!github.event.release.prerelease'
+        id: parse
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             echo "Release tag '$RELEASE_TAG' is not a stable vMAJOR.MINOR.PATCH; skipping major tag move."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          MAJOR_TAG="v${BASH_REMATCH[1]}"
+          echo "major=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "minor=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          echo "patch=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+          echo "major_tag=v${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release is newer than current major tag (R11)
+        if: '!github.event.release.prerelease && steps.parse.outputs.skip != ''true'''
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          MAJOR_TAG: ${{ steps.parse.outputs.major_tag }}
+          NEW_MAJOR: ${{ steps.parse.outputs.major }}
+          NEW_MINOR: ${{ steps.parse.outputs.minor }}
+          NEW_PATCH: ${{ steps.parse.outputs.patch }}
+        run: |
+          set -euo pipefail
+          # Find the highest existing tag for this major version.
+          HIGHEST=""
+          for tag in $(git tag -l "${MAJOR_TAG}.*" --sort=-version:refname); do
+            if [[ "$tag" =~ ^v[0-9]+\.([0-9]+)\.([0-9]+)$ ]]; then
+              HIGHEST="$tag"
+              break
+            fi
+          done
+          if [[ -z "$HIGHEST" ]]; then
+            echo "No existing ${MAJOR_TAG}.x.y tags found; this is the first release."
+            exit 0
+          fi
+          [[ "$HIGHEST" =~ ^v[0-9]+\.([0-9]+)\.([0-9]+)$ ]]
+          CUR_MINOR="${BASH_REMATCH[1]}"
+          CUR_PATCH="${BASH_REMATCH[2]}"
+          echo "Current highest: $HIGHEST (minor=$CUR_MINOR, patch=$CUR_PATCH)"
+          echo "New release:     $RELEASE_TAG (minor=$NEW_MINOR, patch=$NEW_PATCH)"
+          if (( NEW_MINOR < CUR_MINOR || (NEW_MINOR == CUR_MINOR && NEW_PATCH <= CUR_PATCH) )); then
+            echo "::error::Release $RELEASE_TAG is not newer than $HIGHEST. Refusing to roll back the $MAJOR_TAG tag."
+            exit 1
+          fi
+
+      - name: Verify release commit has passing checks (H03)
+        if: '!github.event.release.prerelease && steps.parse.outputs.skip != ''true'''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Resolve the release tag to its commit SHA — target_commitish can be
+          # a branch name which would resolve to the current branch tip.
+          RELEASE_SHA=$(git rev-list -n 1 "$RELEASE_TAG")
+          echo "Release tag $RELEASE_TAG resolves to commit $RELEASE_SHA"
+          STATUS=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/status" --jq '.state')
+          echo "Combined commit status: $STATUS"
+          if [[ "$STATUS" != "success" ]]; then
+            echo "::error::Release commit $RELEASE_SHA does not have passing checks (status: $STATUS). Refusing to promote."
+            exit 1
+          fi
+
+      - name: Move v<major> tag to release commit
+        if: '!github.event.release.prerelease && steps.parse.outputs.skip != ''true'''
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          MAJOR_TAG: ${{ steps.parse.outputs.major_tag }}
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -f "$MAJOR_TAG" "$RELEASE_TAG"

@@ -2,12 +2,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MAX_INLINE_REPORT_UTF16_BYTES,
+  MAX_SUMMARY_BYTES,
   aggregate,
   classifyExit,
   parseReport,
   renderSummary,
   selectReportText,
   setOutputs,
+  validateSarifEnvelope,
   writeStepSummary,
 } from '../src/report.ts';
 import type { OutputDeps } from '../src/report.ts';
@@ -89,15 +91,23 @@ describe('classifyExit', () => {
 
 describe('selectReportText', () => {
   it('selects stdout on exit 0', () => {
-    assert.equal(selectReportText({ exitCode: 0, stdout: 'out', stderr: 'err' }), 'out');
+    assert.equal(selectReportText({ exitCode: 0, stdout: 'out', stderr: 'err', truncated: false }), 'out');
   });
 
-  it('selects stderr on exit 2', () => {
-    assert.equal(selectReportText({ exitCode: 2, stdout: '', stderr: 'err' }), 'err');
+  it('selects stdout on exit 2 (CLI ≥ 0.4.0 routes JSON/SARIF to stdout)', () => {
+    assert.equal(selectReportText({ exitCode: 2, stdout: 'out', stderr: 'err', truncated: false }), 'out');
   });
 
-  it('selects stderr on any other non-zero exit', () => {
-    assert.equal(selectReportText({ exitCode: 1, stdout: 'out', stderr: 'err' }), 'err');
+  it('selects stdout on any non-zero exit', () => {
+    assert.equal(selectReportText({ exitCode: 1, stdout: 'out', stderr: 'err', truncated: false }), 'out');
+  });
+
+  it('falls back to stderr when stdout is empty (backward compat with CLI < 0.4.0)', () => {
+    assert.equal(selectReportText({ exitCode: 2, stdout: '', stderr: 'report', truncated: false }), 'report');
+  });
+
+  it('falls back to stderr when stdout is whitespace-only', () => {
+    assert.equal(selectReportText({ exitCode: 2, stdout: '  \n', stderr: 'report', truncated: false }), 'report');
   });
 });
 
@@ -121,12 +131,99 @@ describe('parseReport', () => {
     assert.deepEqual(parsed, { reports: [], emptyRange: true });
   });
 
+  it('treats an empty JSON array as an empty range (CLI ≥ 0.4.0 F11)', () => {
+    const parsed = parseReport('[]');
+    assert.deepEqual(parsed, { reports: [], emptyRange: true });
+  });
+
   it('throws on empty output instead of reporting a silent green', () => {
     assert.throws(() => parseReport('  \n'), /commit-sentinel produced no output/);
   });
 
   it('throws a descriptive error on malformed JSON', () => {
     assert.throws(() => parseReport('garbage{'), /Failed to parse commit-sentinel JSON report/);
+  });
+});
+
+describe('parseReport validation (R02)', () => {
+  it('rejects null', () => {
+    assert.throws(() => parseReport('null'), /Report must be an object, got null/);
+  });
+
+  it('rejects a number', () => {
+    assert.throws(() => parseReport('42'), /Report must be an object, got number/);
+  });
+
+  it('rejects valid as a string', () => {
+    const report = { ...validReport(), valid: 'false' };
+    assert.throws(() => parseReport(JSON.stringify(report)), /Report field "valid" must be boolean/);
+  });
+
+  it('rejects NaN errorCount', () => {
+    const report = { ...validReport(), errorCount: NaN };
+    // NaN serialises as null in JSON, causing a type error.
+    assert.throws(() => parseReport(JSON.stringify(report)), /must be a finite non-negative integer|must be number/);
+  });
+
+  it('rejects negative warningCount', () => {
+    const report = { ...validReport(), warningCount: -5 };
+    assert.throws(() => parseReport(JSON.stringify(report)), /must be a finite non-negative integer/);
+  });
+
+  it('rejects inconsistent valid/errorCount', () => {
+    const report = { ...invalidReport(), valid: true };
+    assert.throws(() => parseReport(JSON.stringify(report)), /Report inconsistency/);
+  });
+
+  it('rejects missing commit', () => {
+    const { commit: _, ...rest } = validReport();
+    assert.throws(() => parseReport(JSON.stringify(rest)), /Report field "commit" must be an object/);
+  });
+
+  it('rejects commit without header', () => {
+    const report = { ...validReport(), commit: {} };
+    assert.throws(() => parseReport(JSON.stringify(report)), /Report field "commit.header" must be string/);
+  });
+
+  it('rejects results that is not an array', () => {
+    const report = { ...validReport(), results: 'bad' };
+    assert.throws(() => parseReport(JSON.stringify(report)), /Report field "results" must be an array/);
+  });
+
+  it('rejects skippedGitRules that is not an array', () => {
+    const report = { ...validReport(), skippedGitRules: 'bad' };
+    assert.throws(() => parseReport(JSON.stringify(report)), /Report field "skippedGitRules" must be an array/);
+  });
+
+  it('wraps per-item validation errors with the index', () => {
+    const reports = [validReport(), { bad: true }];
+    assert.throws(() => parseReport(JSON.stringify(reports)), /Invalid report at index 1/);
+  });
+});
+
+describe('validateSarifEnvelope (R07)', () => {
+  it('accepts a valid SARIF envelope', () => {
+    assert.equal(validateSarifEnvelope('{"version":"2.1.0","runs":[]}'), null);
+  });
+
+  it('rejects empty output', () => {
+    assert.equal(validateSarifEnvelope(''), 'empty output');
+  });
+
+  it('rejects non-JSON', () => {
+    assert.equal(validateSarifEnvelope('not json'), 'not valid JSON');
+  });
+
+  it('rejects a non-object', () => {
+    assert.equal(validateSarifEnvelope('"hello"'), 'not a JSON object');
+  });
+
+  it('rejects wrong version', () => {
+    assert.equal(validateSarifEnvelope('{"version":"1.0.0","runs":[]}'), 'unexpected version "1.0.0"');
+  });
+
+  it('rejects missing runs', () => {
+    assert.equal(validateSarifEnvelope('{"version":"2.1.0"}'), '"runs" is not an array');
   });
 });
 
@@ -296,11 +393,11 @@ describe('renderSummary', () => {
     assert.match(md, /\| a\\\\\\\|b \|/);
   });
 
-  it('widens the heading fence around embedded backticks', () => {
+  it('widens the heading fence around embedded backticks with padding (R13)', () => {
     const report = invalidReport('fix: use `backtick`');
     const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
-    // A two-backtick fence keeps the inner single backticks inside one span.
-    assert.match(md, /### ``fix: use `backtick```/);
+    // A two-backtick fence with space padding keeps the inner backticks safe.
+    assert.match(md, /### `` fix: use `backtick` ``/);
   });
 
   it('flattens a newline in the commit header', () => {
@@ -313,6 +410,57 @@ describe('renderSummary', () => {
     const md = renderSummary({ reports: [], emptyRange: true }, aggregate([]));
     assert.match(md, /No commits found in range — nothing to validate\./);
     assert.doesNotMatch(md, /\*\*Status:\*\*/);
+  });
+
+  it('shows policy failure when fail-on-warning trips on a valid run (R15)', () => {
+    const reports = [warnReport()];
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports), {
+      policyPassed: false,
+      skippedGitRules: [],
+    });
+    assert.match(md, /⚠️ All commits valid, but policy failed \(fail-on-warning\)/);
+  });
+
+  it('shows skipped rules when present (R15)', () => {
+    const reports = [validReport()];
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports), {
+      policyPassed: true,
+      skippedGitRules: ['signed', 'author-email'],
+    });
+    assert.match(md, /\*\*Skipped rules\*\*.*signed, author-email/);
+  });
+
+  it('escapes HTML in cells (R13)', () => {
+    const report = invalidReport();
+    report.results[0]!.problems = [{ message: '<script>alert(1)</script>' }];
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    assert.match(md, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    assert.doesNotMatch(md, /<script>/);
+  });
+
+  it('normalizes CR/CRLF in cells (R13)', () => {
+    const report = invalidReport();
+    report.results[0]!.problems = [{ message: 'line1\r\nline2\rline3' }];
+    const md = renderSummary({ reports: [report], emptyRange: false }, aggregate([report]));
+    assert.match(md, /line1<br>line2<br>line3/);
+  });
+
+  it('truncates oversized summaries with a notice (R08)', () => {
+    // Create enough reports to exceed the budget.
+    const reports = Array.from({ length: 5000 }, (_, i) => {
+      const r = invalidReport(`bad message ${i} ${'x'.repeat(100)}`);
+      return r;
+    });
+    const md = renderSummary({ reports, emptyRange: false }, aggregate(reports));
+    // Without truncation, 5000 reports would produce several MB.
+    // The truncated summary should be roughly within 2× the budget.
+    assert.ok(
+      Buffer.byteLength(md, 'utf8') < MAX_SUMMARY_BYTES * 2,
+      `summary is ${Buffer.byteLength(md, 'utf8')} bytes, expected < ${MAX_SUMMARY_BYTES * 2}`,
+    );
+    assert.match(md, /Summary truncated/);
+    // Verify we did include some commit sections (not just the header).
+    assert.match(md, /###/);
   });
 });
 

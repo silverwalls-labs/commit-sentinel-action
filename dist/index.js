@@ -4023,11 +4023,11 @@ var require_util2 = __commonJS({
     var { isUint8Array } = __require("node:util/types");
     var { webidl } = require_webidl();
     var supportedHashes = [];
-    var crypto2;
+    var crypto3;
     try {
-      crypto2 = __require("node:crypto");
+      crypto3 = __require("node:crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto2.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto3.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -4300,7 +4300,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto2 === void 0) {
+      if (crypto3 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -4315,7 +4315,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto2.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto3.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -5379,8 +5379,8 @@ var require_body = __commonJS({
     var { multipartFormDataParser } = require_formdata_parser();
     var random;
     try {
-      const crypto2 = __require("node:crypto");
-      random = (max) => crypto2.randomInt(0, max);
+      const crypto3 = __require("node:crypto");
+      random = (max) => crypto3.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -16978,13 +16978,13 @@ var require_frame = __commonJS({
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
     var BUFFER_SIZE = 16386;
-    var crypto2;
+    var crypto3;
     var buffer = null;
     var bufIdx = BUFFER_SIZE;
     try {
-      crypto2 = __require("node:crypto");
+      crypto3 = __require("node:crypto");
     } catch {
-      crypto2 = {
+      crypto3 = {
         // not full compatibility, but minimum.
         randomFillSync: function randomFillSync(buffer2, _offset, _size) {
           for (let i = 0; i < buffer2.length; ++i) {
@@ -16997,7 +16997,7 @@ var require_frame = __commonJS({
     function generateMask() {
       if (bufIdx === BUFFER_SIZE) {
         bufIdx = 0;
-        crypto2.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
+        crypto3.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
       }
       return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]];
     }
@@ -17069,9 +17069,9 @@ var require_connection = __commonJS({
     var { Headers: Headers2, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
-    var crypto2;
+    var crypto3;
     try {
-      crypto2 = __require("node:crypto");
+      crypto3 = __require("node:crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, client, ws, onEstablish, options) {
@@ -17091,7 +17091,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers2(options.headers));
         request.headersList = headersList;
       }
-      const keyValue = crypto2.randomBytes(16).toString("base64");
+      const keyValue = crypto3.randomBytes(16).toString("base64");
       request.headersList.append("sec-websocket-key", keyValue);
       request.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -17121,7 +17121,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto2.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto3.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -18967,7 +18967,7 @@ var require_undici = __commonJS({
 });
 
 // src/index.ts
-import { mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname3, join as join3 } from "node:path";
 
@@ -19043,7 +19043,7 @@ function escapeProperty(s) {
 }
 
 // node_modules/@actions/core/lib/file-command.js
-import * as crypto from "crypto";
+import * as crypto2 from "crypto";
 import * as fs from "fs";
 import * as os2 from "os";
 function issueFileCommand(command, message) {
@@ -19059,7 +19059,7 @@ function issueFileCommand(command, message) {
   });
 }
 function prepareKeyValueMessage(key, value) {
-  const delimiter2 = `ghadelimiter_${crypto.randomUUID()}`;
+  const delimiter2 = `ghadelimiter_${crypto2.randomUUID()}`;
   const convertedValue = toCommandValue(value);
   if (key.includes(delimiter2)) {
     throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter2}"`);
@@ -20209,9 +20209,24 @@ function readString(name) {
   const raw = getInput(name).trim();
   return raw === "" ? null : raw;
 }
+function readMessage() {
+  const raw = getInput("message", { trimWhitespace: false });
+  if (raw === "") return null;
+  if (raw.trim() === "") {
+    throw new Error(
+      "Input 'message' must not be blank when provided."
+    );
+  }
+  return raw;
+}
 function resolveTarget() {
   const set = [];
+  const message = readMessage();
+  if (message !== null) {
+    set.push({ kind: "message", value: message });
+  }
   for (const kind of TARGET_KINDS) {
+    if (kind === "message") continue;
     const value = readString(kind);
     if (value !== null) {
       set.push({ kind, value });
@@ -20248,9 +20263,9 @@ var TARGET_FLAGS = {
 };
 function buildArgs(config, options = {}) {
   const args = [];
-  args.push(TARGET_FLAGS[config.target.kind], config.target.value);
+  args.push(`${TARGET_FLAGS[config.target.kind]}=${config.target.value}`);
   if (config.configPath !== null) {
-    args.push("--config", config.configPath);
+    args.push(`--config=${config.configPath}`);
   }
   const format = options.formatOverride ?? config.format;
   if (format === "json") args.push("--json");
@@ -20259,10 +20274,16 @@ function buildArgs(config, options = {}) {
 }
 
 // src/runner.ts
+var MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+var DEFAULT_TIMEOUT_MS = 3e5;
 async function runCli(opts, exec2) {
   const stdoutChunks = [];
   const stderrChunks = [];
-  const exitCode = await exec2(
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let truncated = false;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const execPromise = exec2(
     "npx",
     ["--yes", `@silverwalls-labs/commit-sentinel@${opts.version}`, ...opts.args],
     {
@@ -20270,24 +20291,44 @@ async function runCli(opts, exec2) {
       ignoreReturnCode: true,
       silent: opts.silent ?? false,
       // Suppress npm warn/notice chatter: on exit 2 the report is read from
-      // stderr and must parse, and a cold-cache npx can print install noise
-      // there. process.env must be spread along or the child loses PATH and
-      // npx can no longer resolve.
+      // stdout and must parse, and a cold-cache npx can print install noise
+      // on stderr. process.env must be spread along or the child loses PATH
+      // and npx can no longer resolve.
       env: { ...process.env, npm_config_loglevel: "error" },
       listeners: {
         stdout: (data) => {
-          stdoutChunks.push(data);
+          if (stdoutBytes < MAX_BUFFER_BYTES) {
+            stdoutChunks.push(data);
+            stdoutBytes += data.length;
+          } else {
+            truncated = true;
+          }
         },
         stderr: (data) => {
-          stderrChunks.push(data);
+          if (stderrBytes < MAX_BUFFER_BYTES) {
+            stderrChunks.push(data);
+            stderrBytes += data.length;
+          } else {
+            truncated = true;
+          }
         }
       }
     }
   );
+  const exitCode = await Promise.race([
+    execPromise,
+    new Promise((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`commit-sentinel timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      ).unref();
+    })
+  ]);
   return {
     exitCode,
     stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-    stderr: Buffer.concat(stderrChunks).toString("utf8")
+    stderr: Buffer.concat(stderrChunks).toString("utf8"),
+    truncated
   };
 }
 
@@ -20298,7 +20339,47 @@ function classifyExit(exitCode) {
   return "error";
 }
 function selectReportText(result) {
-  return result.exitCode === 0 ? result.stdout : result.stderr;
+  return result.stdout.trim() !== "" ? result.stdout : result.stderr;
+}
+function assertType(label, value, expected) {
+  const actual = typeof value;
+  if (actual !== expected) {
+    throw new Error(`Report field "${label}" must be ${expected}, got ${actual}`);
+  }
+}
+function assertFiniteNonNegInt(label, value) {
+  assertType(label, value, "number");
+  const n = value;
+  if (!Number.isFinite(n) || !Number.isSafeInteger(n) || n < 0) {
+    throw new Error(
+      `Report field "${label}" must be a finite non-negative integer, got ${n}`
+    );
+  }
+}
+function validateReport(data) {
+  if (data === null || typeof data !== "object") {
+    throw new Error(`Report must be an object, got ${data === null ? "null" : typeof data}`);
+  }
+  const obj = data;
+  assertType("valid", obj.valid, "boolean");
+  assertFiniteNonNegInt("errorCount", obj.errorCount);
+  assertFiniteNonNegInt("warningCount", obj.warningCount);
+  if (obj.valid !== (obj.errorCount === 0)) {
+    throw new Error(
+      `Report inconsistency: valid=${String(obj.valid)} but errorCount=${String(obj.errorCount)}`
+    );
+  }
+  if (obj.commit === null || typeof obj.commit !== "object") {
+    throw new Error('Report field "commit" must be an object');
+  }
+  assertType("commit.header", obj.commit.header, "string");
+  if (!Array.isArray(obj.results)) {
+    throw new Error('Report field "results" must be an array');
+  }
+  if (!Array.isArray(obj.skippedGitRules)) {
+    throw new Error('Report field "skippedGitRules" must be an array');
+  }
+  return data;
 }
 function parseReport(text) {
   const trimmed = text.trim();
@@ -20317,8 +20398,38 @@ function parseReport(text) {
       { cause: err }
     );
   }
-  const reports = Array.isArray(parsed) ? parsed : [parsed];
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  if (items.length === 0) {
+    return { reports: [], emptyRange: true };
+  }
+  const reports = items.map((item, i) => {
+    try {
+      return validateReport(item);
+    } catch (err) {
+      throw new Error(
+        `Invalid report at index ${i}: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err }
+      );
+    }
+  });
   return { reports, emptyRange: false };
+}
+function validateSarifEnvelope(text) {
+  const trimmed = text.trim();
+  if (trimmed === "") return "empty output";
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return "not valid JSON";
+  }
+  if (parsed === null || typeof parsed !== "object") return "not a JSON object";
+  const obj = parsed;
+  if (obj.version !== "2.1.0") {
+    return `unexpected version "${String(obj.version)}"`;
+  }
+  if (!Array.isArray(obj.runs)) return '"runs" is not an array';
+  return null;
 }
 function aggregate(reports) {
   return {
@@ -20351,41 +20462,70 @@ function setOutputs(opts, deps) {
   }
 }
 function escapeCell(text) {
-  return text.replaceAll("\\", "\\\\").replaceAll("|", "\\|").replaceAll("\n", "<br>");
+  return text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\\", "\\\\").replaceAll("|", "\\|").replaceAll("\n", "<br>");
 }
 function formatCommitHeading(header) {
+  const content = header.replaceAll("\r\n", " ").replaceAll("\r", " ").replaceAll("\n", " ");
   let longestRun = 0;
-  for (const match of header.matchAll(/`+/g)) {
+  for (const match of content.matchAll(/`+/g)) {
     longestRun = Math.max(longestRun, match[0].length);
   }
-  const fence = "`".repeat(longestRun + 1);
-  return `${fence}${header.replaceAll("\n", " ")}${fence}`;
+  const fence = "`".repeat(Math.max(longestRun + 1, 1));
+  const needsPadding = content.startsWith("`") || content.endsWith("`");
+  const padded = needsPadding ? ` ${content} ` : content;
+  return `${fence}${padded}${fence}`;
 }
-function renderSummary(parsed, agg) {
+var MAX_SUMMARY_BYTES = 1e6;
+var TRUNCATION_NOTICE = "\n\n> **Note:** Summary truncated. Full report available via the `report-path` output.\n";
+function renderSummary(parsed, agg, options = { policyPassed: true, skippedGitRules: [] }) {
   const lines = ["## Commit Sentinel", ""];
   if (parsed.emptyRange) {
     lines.push("No commits found in range \u2014 nothing to validate.");
     return lines.join("\n") + "\n";
   }
   const invalidCount = parsed.reports.filter((r) => !r.valid).length;
-  const status = agg.valid ? "\u2705 All commits valid" : `\u274C ${invalidCount} of ${agg.commitsCount} commit(s) invalid`;
+  let status;
+  if (options.policyPassed && agg.valid) {
+    status = "\u2705 All commits valid";
+  } else if (!options.policyPassed && agg.valid) {
+    status = "\u26A0\uFE0F All commits valid, but policy failed (fail-on-warning)";
+  } else {
+    status = `\u274C ${invalidCount} of ${agg.commitsCount} commit(s) invalid`;
+  }
   lines.push(`**Status:** ${status}`);
   lines.push(
     `**Commits:** ${agg.commitsCount} \xB7 **Errors:** ${agg.errorCount} \xB7 **Warnings:** ${agg.warningCount}`
   );
+  if (options.skippedGitRules.length > 0) {
+    lines.push(
+      `**Skipped rules** (not applicable for this input mode): ${options.skippedGitRules.join(", ")}`
+    );
+  }
+  const headerSize = Buffer.byteLength(lines.join("\n") + "\n", "utf8");
+  const truncationSize = Buffer.byteLength(TRUNCATION_NOTICE, "utf8");
+  let currentSize = headerSize;
   for (const report of parsed.reports) {
     if (report.results.length === 0) continue;
-    lines.push("", `### ${formatCommitHeading(report.commit.header)}`, "");
-    lines.push("| Severity | Rule | Message | Suggestion |");
-    lines.push("| --- | --- | --- | --- |");
+    const sectionLines = [];
+    sectionLines.push("", `### ${formatCommitHeading(report.commit.header)}`, "");
+    sectionLines.push("| Severity | Rule | Message | Suggestion |");
+    sectionLines.push("| --- | --- | --- | --- |");
     for (const result of report.results) {
       for (const problem of result.problems) {
         const suggestion = problem.suggestion === void 0 ? "" : escapeCell(problem.suggestion);
-        lines.push(
+        sectionLines.push(
           `| ${result.severity} | ${escapeCell(result.ruleName)} | ${escapeCell(problem.message)} | ${suggestion} |`
         );
       }
     }
+    const sectionText = sectionLines.join("\n");
+    const sectionSize = Buffer.byteLength(sectionText, "utf8");
+    if (currentSize + sectionSize + truncationSize > MAX_SUMMARY_BYTES) {
+      lines.push(TRUNCATION_NOTICE);
+      return lines.join("\n") + "\n";
+    }
+    lines.push(...sectionLines);
+    currentSize += sectionSize;
   }
   return lines.join("\n") + "\n";
 }
@@ -20414,10 +20554,17 @@ async function orchestrate(deps) {
     );
     return;
   }
+  if (jsonRun.truncated) {
+    deps.setFailed(
+      "commit-sentinel output exceeded the 10 MiB buffer limit and was truncated. Reduce the number of commits validated per run."
+    );
+    return;
+  }
   const parsed = parseReport(selectReportText(jsonRun));
   const agg = aggregate(parsed.reports);
   const warningTripped = config.failOnWarning && agg.warningCount > 0;
   const policyPassed = classification === "success" && !warningTripped;
+  const skippedGitRules = Array.from(new Set(parsed.reports.flatMap((r) => r.skippedGitRules)));
   setOutputs(
     { reports: parsed.reports, agg, policyPassed },
     {
@@ -20426,6 +20573,7 @@ async function orchestrate(deps) {
       warning: deps.warning
     }
   );
+  let formatPassOutput = null;
   if (config.format === "json") {
     deps.info(selectReportText(jsonRun));
   } else {
@@ -20434,43 +20582,66 @@ async function orchestrate(deps) {
         version: config.version,
         args: buildArgs(config),
         cwd: config.workingDirectory,
-        silent: false
+        silent: true
       },
       deps.exec
     );
     if (classifyExit(formatRun.exitCode) === "error") {
-      if (formatRun.stderr.trim() !== "") deps.error(formatRun.stderr.trim());
-      deps.setFailed(
-        `commit-sentinel exited with code ${formatRun.exitCode}. See logs above.`
+      deps.warning(
+        `Format pass exited with code ${formatRun.exitCode}; output may be incomplete.`
       );
-      return;
+    }
+    const output = formatRun.stdout + formatRun.stderr;
+    if (output !== "") {
+      const token = crypto.randomUUID();
+      deps.writeLine(`::stop-commands::${token}`);
+      deps.writeLine(output);
+      deps.writeLine(`::${token}::`);
+    }
+    if (config.format === "sarif" && classifyExit(formatRun.exitCode) !== "error") {
+      formatPassOutput = selectReportText(formatRun);
     }
   }
   if (config.summary) {
-    await writeStepSummary(renderSummary(parsed, agg), deps.writeSummary);
+    try {
+      await writeStepSummary(
+        renderSummary(parsed, agg, { policyPassed, skippedGitRules }),
+        deps.writeSummary
+      );
+    } catch (err) {
+      deps.warning(
+        `Failed to write step summary: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
   if (config.sarifFile !== null) {
-    if (parsed.emptyRange) {
-      deps.warning("No commits found in range; sarif-file was not written.");
-    } else {
-      const sarifRun = await runCli(
-        {
-          version: config.version,
-          args: buildArgs(config, { formatOverride: "sarif" }),
-          cwd: config.workingDirectory,
-          silent: true
-        },
-        deps.exec
-      );
-      if (classifyExit(sarifRun.exitCode) === "error") {
-        deps.warning(
-          `SARIF pass exited with code ${sarifRun.exitCode}; sarif-file was not written.`
-        );
+    try {
+      if (parsed.emptyRange) {
+        deps.warning("No commits found in range; sarif-file was not written.");
+      } else if (config.format === "sarif" && formatPassOutput !== null) {
+        writeSarif(config, formatPassOutput, deps);
       } else {
-        const sarifPath = resolve2(config.workingDirectory, config.sarifFile);
-        deps.writeSarifFile(sarifPath, selectReportText(sarifRun));
-        deps.setOutput("sarif-path", sarifPath);
+        const sarifRun = await runCli(
+          {
+            version: config.version,
+            args: buildArgs(config, { formatOverride: "sarif" }),
+            cwd: config.workingDirectory,
+            silent: true
+          },
+          deps.exec
+        );
+        if (classifyExit(sarifRun.exitCode) === "error") {
+          deps.warning(
+            `SARIF pass exited with code ${sarifRun.exitCode}; sarif-file was not written.`
+          );
+        } else {
+          writeSarif(config, selectReportText(sarifRun), deps);
+        }
       }
+    } catch (err) {
+      deps.warning(
+        `Failed to write SARIF file: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
   if (classification === "policy-violation") {
@@ -20484,6 +20655,16 @@ async function orchestrate(deps) {
     deps.setFailed("Commit validation reported warnings and fail-on-warning is enabled.");
   }
 }
+function writeSarif(config, sarifText, deps) {
+  const error2 = validateSarifEnvelope(sarifText);
+  if (error2 !== null) {
+    deps.warning(`SARIF output is invalid (${error2}); sarif-file was not written.`);
+    return;
+  }
+  const sarifPath = resolve2(config.workingDirectory, config.sarifFile);
+  deps.writeSarifFile(sarifPath, sarifText);
+  deps.setOutput("sarif-path", sarifPath);
+}
 
 // src/index.ts
 orchestrate({
@@ -20494,14 +20675,18 @@ orchestrate({
   error: (m) => error(m),
   warning: (m) => warning(m),
   info: (m) => info(m),
+  writeLine: (text) => process.stdout.write(text + "\n"),
   writeReportFile: (json) => {
-    const dir = process.env.RUNNER_TEMP ?? tmpdir();
-    const path4 = join3(dir, "commit-sentinel-report.json");
-    writeFileSync(path4, json, "utf8");
+    const base = process.env.RUNNER_TEMP ?? tmpdir();
+    const dir = mkdtempSync(join3(base, "commit-sentinel-"));
+    const path4 = join3(dir, "report.json");
+    writeFileSync(path4, json, { encoding: "utf8", flag: "wx" });
     return path4;
   },
   writeSarifFile: (path4, contents) => {
     mkdirSync(dirname3(path4), { recursive: true });
+    const stat2 = lstatSync(path4, { throwIfNoEntry: false });
+    if (stat2?.isSymbolicLink()) unlinkSync(path4);
     writeFileSync(path4, contents, "utf8");
   },
   writeSummary: async (md) => {
@@ -20510,6 +20695,7 @@ orchestrate({
 }).catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
   setFailed(message);
+  if (message.includes("timed out")) process.exit(1);
 });
 /*! Bundled license information:
 
