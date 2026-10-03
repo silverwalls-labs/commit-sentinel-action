@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runCli } from '../src/runner.ts';
+import { MAX_BUFFER_BYTES, runCli } from '../src/runner.ts';
 import type { ExecFn, ExecOptions } from '../src/runner.ts';
 
 interface RecordedCall {
@@ -99,5 +99,46 @@ describe('runCli', () => {
 
     assert.equal(result.stdout, '');
     assert.equal(result.stderr, '');
+    assert.equal(result.truncated, false);
+  });
+
+  it('sets truncated when stdout exceeds the buffer limit (R09)', async () => {
+    const bigChunk = Buffer.alloc(MAX_BUFFER_BYTES + 1, 'x');
+    const { exec } = makeExec((options) => {
+      options.listeners.stdout(bigChunk);
+      options.listeners.stdout(Buffer.from('overflow'));
+      return 0;
+    });
+
+    const result = await runCli({ version: 'latest', args: [], cwd: '.' }, exec);
+
+    assert.equal(result.truncated, true);
+    // The first chunk is accepted (even though it's 1 byte over, it's a single push).
+    assert.ok(result.stdout.length > 0);
+  });
+
+  it('sets truncated when stderr exceeds the buffer limit (R09)', async () => {
+    const bigChunk = Buffer.alloc(MAX_BUFFER_BYTES + 1, 'e');
+    const { exec } = makeExec((options) => {
+      options.listeners.stderr(bigChunk);
+      options.listeners.stderr(Buffer.from('overflow'));
+      return 0;
+    });
+
+    const result = await runCli({ version: 'latest', args: [], cwd: '.' }, exec);
+
+    assert.equal(result.truncated, true);
+  });
+
+  it('rejects with a timeout error when the deadline expires (R10)', async () => {
+    const exec: ExecFn = async () => {
+      // Simulate a hung process that never resolves.
+      return new Promise<number>(() => {});
+    };
+
+    await assert.rejects(
+      runCli({ version: 'latest', args: [], cwd: '.', timeoutMs: 50 }, exec),
+      /timed out after 50ms/,
+    );
   });
 });

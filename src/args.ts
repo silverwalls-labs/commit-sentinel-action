@@ -15,11 +15,13 @@ export interface BuildArgsOptions {
 export function buildArgs(config: Config, options: BuildArgsOptions = {}): string[] {
   const args: string[] = [];
 
-  args.push(TARGET_FLAGS[config.target.kind], config.target.value);
+  // Join flag and value with '=' so that leading-dash values (e.g. --message=--help)
+  // are not rejected by Node's parseArgs as ambiguous option syntax (R14).
+  args.push(`${TARGET_FLAGS[config.target.kind]}=${config.target.value}`);
 
   // When unset, the CLI resolves its own config against the runner cwd.
   if (config.configPath !== null) {
-    args.push('--config', config.configPath);
+    args.push(`--config=${config.configPath}`);
   }
 
   // The CLI has no --format flag: human is the flagless default.

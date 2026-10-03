@@ -22,7 +22,7 @@ inputs:
     description: 'Validate a literal commit message string. Mutually exclusive with file, commit, range, base.'
     required: false
   file:
-    description: 'Validate the first line of a commit message file, e.g. .git/COMMIT_EDITMSG. Mutually exclusive with message, commit, range, base.'
+    description: 'Validate a commit message file, e.g. .git/COMMIT_EDITMSG. Mutually exclusive with message, commit, range, base.'
     required: false
   commit:
     description: |
@@ -75,7 +75,7 @@ outputs:
       entry per commit). Omitted (empty string) when the report exceeds
       GitHub's ~1 MB output limit; read "report-path" instead.
   report-path:
-    description: 'Filesystem path to the full JSON report. Always set; use for large reports.'
+    description: 'Filesystem path to the full JSON report. Set when the CLI produces a valid report; use for large reports.'
   sarif-path:
     description: 'Path to the SARIF report. Only set when the sarif-file input is provided.'
 
