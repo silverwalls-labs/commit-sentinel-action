@@ -65,7 +65,9 @@ export async function orchestrate(deps: OrchestrateDeps): Promise<void> {
     if (jsonRun.truncated) {
       deps.warning('commit-sentinel output exceeded the 10 MiB buffer limit and was truncated.');
     }
-    emitSuspended(jsonRun.stderr.trim(), deps);
+    // Both streams can carry diagnostics (partial output on stdout, the error
+    // on stderr) — emit everything the CLI printed, suspended (R01).
+    emitSuspended((jsonRun.stdout + jsonRun.stderr).trim(), deps);
     deps.setFailed(
       `commit-sentinel exited with code ${jsonRun.exitCode}. See logs above.`,
     );

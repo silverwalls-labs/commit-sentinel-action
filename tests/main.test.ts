@@ -238,6 +238,18 @@ describe('orchestrate', () => {
     assert.equal(ctx.summaryWrites.length, 0);
   });
 
+  it('runtime error: emits stdout diagnostics too, before stderr (R01)', async () => {
+    const ctx = makeDeps(baseConfig(), [
+      { stdout: 'partial output\n', stderr: 'fatal: bad ref\n', exitCode: 1 },
+    ]);
+
+    await orchestrate(ctx.deps);
+
+    assert.equal(ctx.writeLines.length, 3);
+    assert.equal(ctx.writeLines[1]!, 'partial output\nfatal: bad ref');
+    assert.deepEqual(ctx.failed, ['commit-sentinel exited with code 1. See logs above.']);
+  });
+
   it('truncated output fails with a clear message instead of a parse error', async () => {
     const config = baseConfig();
     const ctx = makeDeps(config, []);

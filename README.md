@@ -120,10 +120,10 @@ Without `config`, the CLI resolves `commit-sentinel.config.ts` in the working di
 | `commits-count` | Number of commits validated. |
 | `error-count`   | Total rule violations at error level. |
 | `warning-count` | Total rule violations at warning level. |
-| `policy-passed` | `"true"` if the CLI exited 0 and `fail-on-warning` did not trip; `"false"` on a policy violation or a tripped `fail-on-warning`. Unset when the CLI errors before producing a report. |
+| `policy-passed` | `"true"` if the CLI exited 0 and `fail-on-warning` did not trip; `"false"` on a policy violation or a tripped `fail-on-warning`. Unset when the CLI errors or the report fails validation. |
 | `report-json`   | Full JSON report, inline — always a JSON array of `ValidationReport` (one entry per commit). Empty string when over GitHub's ~1 MB output limit (measured in UTF-16 code units); read `report-path` instead. |
 | `report-path`   | Filesystem path to the full JSON report (written to a unique temp directory per invocation). Set when the CLI produces a valid report. |
-| `sarif-path`    | Path to the SARIF report. Only set when the `sarif-file` input is provided. |
+| `sarif-path`    | Path to the SARIF report. Set when the SARIF file is successfully written; unset when `sarif-file` is omitted or the SARIF output is invalid. |
 
 Consume outputs from a later step:
 
