@@ -46,11 +46,32 @@ function readString(name: string): string | null {
   return raw === '' ? null : raw;
 }
 
+// Read the message input without trimming so that leading/trailing whitespace
+// in the commit message reaches the CLI unchanged (R04).
+function readMessage(): string | null {
+  const raw = core.getInput('message', { trimWhitespace: false });
+  if (raw === '') return null;
+  if (raw.trim() === '') {
+    throw new Error(
+      "Input 'message' must not be blank when provided.",
+    );
+  }
+  return raw;
+}
+
 // `commit` deliberately has no action.yml default: a YAML default would make it
 // always look user-set and break the mutual-exclusion check.
 function resolveTarget(): Target {
   const set: Target[] = [];
+
+  // Handle `message` separately — it uses trimWhitespace:false (R04).
+  const message = readMessage();
+  if (message !== null) {
+    set.push({ kind: 'message', value: message });
+  }
+
   for (const kind of TARGET_KINDS) {
+    if (kind === 'message') continue;
     const value = readString(kind);
     if (value !== null) {
       set.push({ kind, value });

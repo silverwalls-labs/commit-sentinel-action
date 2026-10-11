@@ -22,7 +22,7 @@ inputs:
     description: 'Validate a literal commit message string. Mutually exclusive with file, commit, range, base.'
     required: false
   file:
-    description: 'Validate the first line of a commit message file, e.g. .git/COMMIT_EDITMSG. Mutually exclusive with message, commit, range, base.'
+    description: 'Validate a commit message file, e.g. .git/COMMIT_EDITMSG. Mutually exclusive with message, commit, range, base.'
     required: false
   commit:
     description: |
@@ -68,16 +68,16 @@ outputs:
   warning-count:
     description: 'Total rule violations at warning level.'
   policy-passed:
-    description: '"true" if the CLI exited 0 and fail-on-warning did not trip; "false" on a policy violation or a tripped fail-on-warning. Unset when the CLI errors before producing a report.'
+    description: '"true" if the CLI exited 0 and fail-on-warning did not trip; "false" on a policy violation or a tripped fail-on-warning. Unset when the CLI errors or the report fails validation.'
   report-json:
     description: |
       Full JSON report, inline, always a JSON array of ValidationReport (one
       entry per commit). Omitted (empty string) when the report exceeds
       GitHub's ~1 MB output limit; read "report-path" instead.
   report-path:
-    description: 'Filesystem path to the full JSON report. Always set; use for large reports.'
+    description: 'Filesystem path to the full JSON report. Set when the CLI produces a valid report; use for large reports.'
   sarif-path:
-    description: 'Path to the SARIF report. Only set when the sarif-file input is provided.'
+    description: 'Path to the SARIF report. Set when the SARIF file is successfully written; unset when sarif-file is omitted or the SARIF output is invalid.'
 
 runs:
   using: 'node24'
